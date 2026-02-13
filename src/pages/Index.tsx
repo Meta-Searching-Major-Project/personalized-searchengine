@@ -1,30 +1,139 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Search } from "lucide-react";
+import { Search, Loader2 } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
 import AppHeader from "@/components/AppHeader";
+import SearchResultCard from "@/components/SearchResultCard";
+import EngineStatusBar from "@/components/EngineStatusBar";
+import { multiSearch, type MergedResult, type EngineSummary } from "@/lib/api/search";
+import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/contexts/AuthContext";
 
 const Index = () => {
+  const { user } = useAuth();
+  const { toast } = useToast();
   const [query, setQuery] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [results, setResults] = useState<MergedResult[]>([]);
+  const [engineSummary, setEngineSummary] = useState<EngineSummary[]>([]);
+  const [searchedQuery, setSearchedQuery] = useState("");
+  const [queryTime, setQueryTime] = useState<number | undefined>();
+  const startTimeRef = useRef<number>(0);
 
-  const handleSearch = (e: React.FormEvent) => {
+  const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!query.trim()) return;
-    // TODO: Phase 2 — trigger multi-engine search
-    console.log("Search query:", query);
+    const trimmed = query.trim();
+    if (!trimmed || !user) return;
+
+    setLoading(true);
+    setResults([]);
+    setEngineSummary([]);
+    startTimeRef.current = Date.now();
+
+    try {
+      const response = await multiSearch(trimmed);
+      const elapsed = Date.now() - startTimeRef.current;
+      setQueryTime(elapsed);
+
+      if (!response.success) {
+        toast({
+          title: "Search failed",
+          description: response.error || "An error occurred",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      setResults(response.merged || []);
+      setEngineSummary(response.engineResults || []);
+      setSearchedQuery(trimmed);
+
+      // Persist search history and results
+      const { data: historyRow, error: historyError } = await supabase
+        .from("search_history")
+        .insert({ query: trimmed, user_id: user.id })
+        .select("id")
+        .single();
+
+      if (historyError) {
+        console.error("Failed to save search history:", historyError);
+      } else if (historyRow && response.merged && response.merged.length > 0) {
+        // Build rows for each engine/rank pair
+        const resultRows: {
+          search_history_id: string;
+          engine: string;
+          original_rank: number;
+          title: string;
+          url: string;
+          snippet: string | null;
+          aggregated_rank: number;
+        }[] = [];
+
+        response.merged.forEach((m, aggIdx) => {
+          m.engines.forEach((eng) => {
+            resultRows.push({
+              search_history_id: historyRow.id,
+              engine: eng.engine,
+              original_rank: eng.rank,
+              title: m.title,
+              url: m.url,
+              snippet: m.snippet || null,
+              aggregated_rank: aggIdx + 1,
+            });
+          });
+        });
+
+        const { error: resultsError } = await supabase
+          .from("search_results")
+          .insert(resultRows);
+
+        if (resultsError) {
+          console.error("Failed to save search results:", resultsError);
+        }
+      }
+    } catch (error) {
+      console.error("Search error:", error);
+      toast({
+        title: "Search failed",
+        description: "Could not connect to search service",
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
+    }
   };
+
+  const handleAction = (url: string, action: string) => {
+    toast({
+      title: `${action.charAt(0).toUpperCase() + action.slice(1)}d`,
+      description: `Result action "${action}" recorded for feedback tracking`,
+    });
+    // Phase 3 will add full feedback persistence
+  };
+
+  const hasResults = results.length > 0;
 
   return (
     <div className="min-h-screen bg-background">
       <AppHeader />
-      <main className="flex flex-col items-center justify-center px-4" style={{ minHeight: "calc(100vh - 3.5rem)" }}>
-        <div className="w-full max-w-xl text-center">
-          <h1 className="mb-2 text-4xl font-bold tracking-tight text-foreground">
-            PersonaSearch
-          </h1>
-          <p className="mb-8 text-muted-foreground">
-            Personalized multi-engine search with intelligent rank aggregation
-          </p>
+      <main
+        className={`flex flex-col items-center px-4 transition-all ${
+          hasResults ? "pt-6" : "justify-center"
+        }`}
+        style={{ minHeight: "calc(100vh - 3.5rem)" }}
+      >
+        <div className={`w-full ${hasResults ? "max-w-3xl" : "max-w-xl text-center"}`}>
+          {!hasResults && (
+            <>
+              <h1 className="mb-2 text-4xl font-bold tracking-tight text-foreground">
+                PersonaSearch
+              </h1>
+              <p className="mb-8 text-muted-foreground">
+                Personalized multi-engine search with intelligent rank aggregation
+              </p>
+            </>
+          )}
           <form onSubmit={handleSearch} className="flex gap-2">
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -34,13 +143,54 @@ const Index = () => {
                 placeholder="Search the web..."
                 className="pl-10"
                 autoFocus
+                disabled={loading}
               />
             </div>
-            <Button type="submit">Search</Button>
+            <Button type="submit" disabled={loading || !query.trim()}>
+              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Search"}
+            </Button>
           </form>
-          <p className="mt-4 text-xs text-muted-foreground">
-            Aggregates results from Google, Bing & DuckDuckGo using fuzzy rank aggregation
-          </p>
+
+          {!hasResults && !loading && (
+            <p className="mt-4 text-xs text-muted-foreground">
+              Aggregates results from Google, Bing &amp; DuckDuckGo using fuzzy rank
+              aggregation
+            </p>
+          )}
+
+          {loading && (
+            <div className="mt-12 flex flex-col items-center gap-3">
+              <Loader2 className="h-8 w-8 animate-spin text-primary" />
+              <p className="text-sm text-muted-foreground">
+                Querying Google, Bing &amp; DuckDuckGo in parallel…
+              </p>
+            </div>
+          )}
+
+          {hasResults && (
+            <div className="mt-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-medium text-foreground">
+                  Results for &ldquo;{searchedQuery}&rdquo;
+                </p>
+              </div>
+              <EngineStatusBar
+                engines={engineSummary}
+                totalResults={results.length}
+                queryTime={queryTime}
+              />
+              <div className="space-y-2 pb-8">
+                {results.map((result, i) => (
+                  <SearchResultCard
+                    key={result.url}
+                    result={result}
+                    index={i}
+                    onAction={handleAction}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </main>
     </div>
