@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Search, Loader2 } from "lucide-react";
@@ -9,17 +9,25 @@ import EngineStatusBar from "@/components/EngineStatusBar";
 import { multiSearch, type MergedResult, type EngineSummary } from "@/lib/api/search";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
+import { useFeedbackTracker } from "@/hooks/useFeedbackTracker";
+
+export interface ResultWithId extends MergedResult {
+  /** Maps engine name → search_results row id */
+  resultIds: Record<string, string>;
+}
 
 const Index = () => {
   const { user } = useAuth();
   const { toast } = useToast();
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
-  const [results, setResults] = useState<MergedResult[]>([]);
+  const [results, setResults] = useState<ResultWithId[]>([]);
   const [engineSummary, setEngineSummary] = useState<EngineSummary[]>([]);
   const [searchedQuery, setSearchedQuery] = useState("");
   const [queryTime, setQueryTime] = useState<number | undefined>();
   const startTimeRef = useRef<number>(0);
+
+  const feedback = useFeedbackTracker();
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -29,6 +37,7 @@ const Index = () => {
     setLoading(true);
     setResults([]);
     setEngineSummary([]);
+    feedback.resetSession();
     startTimeRef.current = Date.now();
 
     try {
@@ -45,11 +54,11 @@ const Index = () => {
         return;
       }
 
-      setResults(response.merged || []);
+      const merged = response.merged || [];
       setEngineSummary(response.engineResults || []);
       setSearchedQuery(trimmed);
 
-      // Persist search history and results
+      // Persist search history and results, then map IDs back
       const { data: historyRow, error: historyError } = await supabase
         .from("search_history")
         .insert({ query: trimmed, user_id: user.id })
@@ -58,8 +67,12 @@ const Index = () => {
 
       if (historyError) {
         console.error("Failed to save search history:", historyError);
-      } else if (historyRow && response.merged && response.merged.length > 0) {
-        // Build rows for each engine/rank pair
+        // Still show results even if persistence fails
+        setResults(merged.map((m) => ({ ...m, resultIds: {} })));
+        return;
+      }
+
+      if (historyRow && merged.length > 0) {
         const resultRows: {
           search_history_id: string;
           engine: string;
@@ -70,7 +83,7 @@ const Index = () => {
           aggregated_rank: number;
         }[] = [];
 
-        response.merged.forEach((m, aggIdx) => {
+        merged.forEach((m, aggIdx) => {
           m.engines.forEach((eng) => {
             resultRows.push({
               search_history_id: historyRow.id,
@@ -84,13 +97,32 @@ const Index = () => {
           });
         });
 
-        const { error: resultsError } = await supabase
+        const { data: insertedResults, error: resultsError } = await supabase
           .from("search_results")
-          .insert(resultRows);
+          .insert(resultRows)
+          .select("id, url, engine");
 
         if (resultsError) {
           console.error("Failed to save search results:", resultsError);
+          setResults(merged.map((m) => ({ ...m, resultIds: {} })));
+          return;
         }
+
+        // Build a map: url → { engine → id }
+        const idMap = new Map<string, Record<string, string>>();
+        insertedResults?.forEach((r) => {
+          if (!idMap.has(r.url)) idMap.set(r.url, {});
+          idMap.get(r.url)![r.engine] = r.id;
+        });
+
+        setResults(
+          merged.map((m) => ({
+            ...m,
+            resultIds: idMap.get(m.url) || {},
+          })),
+        );
+      } else {
+        setResults(merged.map((m) => ({ ...m, resultIds: {} })));
       }
     } catch (error) {
       console.error("Search error:", error);
@@ -102,14 +134,6 @@ const Index = () => {
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleAction = (url: string, action: string) => {
-    toast({
-      title: `${action.charAt(0).toUpperCase() + action.slice(1)}d`,
-      description: `Result action "${action}" recorded for feedback tracking`,
-    });
-    // Phase 3 will add full feedback persistence
   };
 
   const hasResults = results.length > 0;
@@ -185,7 +209,7 @@ const Index = () => {
                     key={result.url}
                     result={result}
                     index={i}
-                    onAction={handleAction}
+                    feedback={feedback}
                   />
                 ))}
               </div>

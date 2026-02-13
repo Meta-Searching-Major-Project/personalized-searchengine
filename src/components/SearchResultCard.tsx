@@ -1,12 +1,14 @@
+import { useRef, useEffect, useCallback } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Bookmark, Mail, Printer, Save, ExternalLink } from "lucide-react";
-import type { MergedResult } from "@/lib/api/search";
+import type { ResultWithId } from "@/pages/Index";
+import type { useFeedbackTracker } from "@/hooks/useFeedbackTracker";
 
 interface SearchResultCardProps {
-  result: MergedResult;
+  result: ResultWithId;
   index: number;
-  onAction?: (url: string, action: string) => void;
+  feedback: ReturnType<typeof useFeedbackTracker>;
 }
 
 const engineColors: Record<string, string> = {
@@ -15,7 +17,12 @@ const engineColors: Record<string, string> = {
   duckduckgo: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200",
 };
 
-const SearchResultCard = ({ result, index, onAction }: SearchResultCardProps) => {
+const SearchResultCard = ({ result, index, feedback }: SearchResultCardProps) => {
+  const snippetRef = useRef<HTMLParagraphElement>(null);
+
+  // Pick the first available search_result_id for this merged result
+  const searchResultId = Object.values(result.resultIds)[0];
+
   const displayUrl = (() => {
     try {
       const u = new URL(result.url);
@@ -24,6 +31,59 @@ const SearchResultCard = ({ result, index, onAction }: SearchResultCardProps) =>
       return result.url;
     }
   })();
+
+  // C — track copy events on the snippet
+  useEffect(() => {
+    const el = snippetRef.current;
+    if (!el || !searchResultId) return;
+
+    const handler = () => {
+      const sel = window.getSelection();
+      const text = sel?.toString() || "";
+      if (text.length > 0) {
+        feedback.trackCopyPaste(searchResultId, text.length);
+      }
+    };
+
+    el.addEventListener("copy", handler);
+    return () => el.removeEventListener("copy", handler);
+  }, [searchResultId, feedback]);
+
+  // V + T — track click order on open, dwell time on return via visibilitychange
+  const handleLinkClick = useCallback(() => {
+    if (!searchResultId) return;
+    feedback.trackClick({ searchResultId, url: result.url });
+
+    // Listen for visibility change to estimate dwell time
+    const onVisible = () => {
+      if (document.visibilityState === "visible") {
+        feedback.trackDwell(searchResultId);
+        document.removeEventListener("visibilitychange", onVisible);
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+  }, [searchResultId, result.url, feedback]);
+
+  const handleAction = useCallback(
+    (action: string) => {
+      if (!searchResultId) return;
+      switch (action) {
+        case "save":
+          feedback.trackSave(searchResultId);
+          break;
+        case "bookmark":
+          feedback.trackBookmark(searchResultId);
+          break;
+        case "email":
+          feedback.trackEmail(searchResultId);
+          break;
+        case "print":
+          feedback.trackPrint(searchResultId);
+          break;
+      }
+    },
+    [searchResultId, feedback],
+  );
 
   return (
     <div className="group rounded-lg border bg-card p-4 transition-colors hover:bg-accent/50">
@@ -40,12 +100,16 @@ const SearchResultCard = ({ result, index, onAction }: SearchResultCardProps) =>
             target="_blank"
             rel="noopener noreferrer"
             className="mb-1 inline-flex items-center gap-1 text-base font-medium text-primary hover:underline"
+            onClick={handleLinkClick}
           >
             {result.title}
             <ExternalLink className="h-3 w-3 shrink-0 opacity-0 transition-opacity group-hover:opacity-100" />
           </a>
           {result.snippet && (
-            <p className="text-sm text-muted-foreground line-clamp-2">
+            <p
+              ref={snippetRef}
+              className="text-sm text-muted-foreground line-clamp-2"
+            >
               {result.snippet}
             </p>
           )}
@@ -67,7 +131,7 @@ const SearchResultCard = ({ result, index, onAction }: SearchResultCardProps) =>
             size="icon"
             className="h-7 w-7"
             title="Save"
-            onClick={() => onAction?.(result.url, "save")}
+            onClick={() => handleAction("save")}
           >
             <Save className="h-3.5 w-3.5" />
           </Button>
@@ -76,7 +140,7 @@ const SearchResultCard = ({ result, index, onAction }: SearchResultCardProps) =>
             size="icon"
             className="h-7 w-7"
             title="Bookmark"
-            onClick={() => onAction?.(result.url, "bookmark")}
+            onClick={() => handleAction("bookmark")}
           >
             <Bookmark className="h-3.5 w-3.5" />
           </Button>
@@ -85,7 +149,7 @@ const SearchResultCard = ({ result, index, onAction }: SearchResultCardProps) =>
             size="icon"
             className="h-7 w-7"
             title="Email"
-            onClick={() => onAction?.(result.url, "email")}
+            onClick={() => handleAction("email")}
           >
             <Mail className="h-3.5 w-3.5" />
           </Button>
@@ -94,7 +158,7 @@ const SearchResultCard = ({ result, index, onAction }: SearchResultCardProps) =>
             size="icon"
             className="h-7 w-7"
             title="Print"
-            onClick={() => onAction?.(result.url, "print")}
+            onClick={() => handleAction("print")}
           >
             <Printer className="h-3.5 w-3.5" />
           </Button>
