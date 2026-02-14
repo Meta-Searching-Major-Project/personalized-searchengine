@@ -21,14 +21,18 @@ export interface EngineSummary {
 export interface SearchResponse {
   success: boolean;
   query?: string;
+  aggregation_method?: string;
   merged?: MergedResult[];
   engineResults?: EngineSummary[];
   error?: string;
 }
 
-export async function multiSearch(query: string): Promise<SearchResponse> {
+export async function multiSearch(
+  query: string,
+  aggregationMethod: string = "borda"
+): Promise<SearchResponse> {
   const { data, error } = await supabase.functions.invoke("multi-search", {
-    body: { query },
+    body: { query, aggregation_method: aggregationMethod },
   });
 
   if (error) {
