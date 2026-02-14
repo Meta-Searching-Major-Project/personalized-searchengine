@@ -1,3 +1,5 @@
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
@@ -163,6 +165,55 @@ Deno.serve(async (req) => {
     ]);
 
     const engineResults = [google, bing, duckduckgo];
+
+    // (N+1)-th source: query the feedback learning index for this user
+    let learningResults: EngineResult = { engine: "learned", results: [] };
+    const authHeader = req.headers.get("Authorization");
+    if (authHeader) {
+      try {
+        const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+        const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
+        const anonClient = createClient(supabaseUrl, anonKey);
+        const token = authHeader.replace("Bearer ", "");
+        const { data: { user } } = await anonClient.auth.getUser(token);
+
+        if (user) {
+          const serviceClient = createClient(supabaseUrl, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+          const { data: learnedDocs } = await serviceClient
+            .from("feedback_learning_index")
+            .select("url, title, snippet, learned_score, query_matches")
+            .eq("user_id", user.id)
+            .order("learned_score", { ascending: false })
+            .limit(20);
+
+          if (learnedDocs && learnedDocs.length > 0) {
+            // Filter: only include docs whose query_matches overlap with current query words
+            const queryWords = trimmedQuery.toLowerCase().split(/\s+/);
+            const relevant = learnedDocs.filter((doc) => {
+              const matches = doc.query_matches || [];
+              return matches.some((q: string) => {
+                const matchWords = q.toLowerCase().split(/\s+/);
+                return queryWords.some((w) => matchWords.includes(w));
+              });
+            });
+
+            learningResults.results = relevant.map((doc, i) => ({
+              position: i + 1,
+              title: doc.title || doc.url,
+              link: doc.url,
+              snippet: doc.snippet || "",
+            }));
+          }
+        }
+      } catch (e) {
+        console.error("Learning index query failed:", e);
+      }
+    }
+
+    if (learningResults.results.length > 0) {
+      engineResults.push(learningResults);
+    }
+
     const merged = deduplicateAndMerge(engineResults);
 
     return new Response(
