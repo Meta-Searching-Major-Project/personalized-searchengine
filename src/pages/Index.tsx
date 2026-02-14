@@ -8,7 +8,7 @@ import AppHeader from "@/components/AppHeader";
 import SearchResultCard from "@/components/SearchResultCard";
 import EngineStatusBar from "@/components/EngineStatusBar";
 import { multiSearch, type MergedResult, type EngineSummary } from "@/lib/api/search";
-import { updateLearningIndex } from "@/lib/api/learningIndex";
+import { updateLearningIndex, computeSQM } from "@/lib/api/learningIndex";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { useFeedbackTracker } from "@/hooks/useFeedbackTracker";
@@ -78,6 +78,7 @@ const Index = () => {
     // Process previous session's feedback before starting new search
     if (prevHistoryIdRef.current) {
       updateLearningIndex(prevHistoryIdRef.current);
+      computeSQM(prevHistoryIdRef.current);
     }
 
     feedback.resetSession();
@@ -188,6 +189,7 @@ const Index = () => {
       if (prevHistoryIdRef.current) {
         // Fire-and-forget via sendBeacon fallback
         updateLearningIndex(prevHistoryIdRef.current);
+        computeSQM(prevHistoryIdRef.current);
       }
     };
     window.addEventListener("beforeunload", handleUnload);
