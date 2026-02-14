@@ -305,6 +305,37 @@ Deno.serve(async (req) => {
   }
 
   try {
+    // Validate authentication
+    const authHeader = req.headers.get("Authorization");
+    if (!authHeader) {
+      return new Response(
+        JSON.stringify({ success: false, error: "Unauthorized" }),
+        {
+          status: 401,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        }
+      );
+    }
+
+    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+    const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
+    const authClient = createClient(supabaseUrl, anonKey);
+    const token = authHeader.replace("Bearer ", "");
+    const {
+      data: { user: authUser },
+      error: authError,
+    } = await authClient.auth.getUser(token);
+
+    if (authError || !authUser) {
+      return new Response(
+        JSON.stringify({ success: false, error: "Invalid authentication" }),
+        {
+          status: 401,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        }
+      );
+    }
+
     const { query, aggregation_method } = await req.json();
 
     if (!query || typeof query !== "string" || query.trim().length === 0) {
@@ -358,67 +389,54 @@ Deno.serve(async (req) => {
     // (N+1)-th source: query the feedback learning index for this user
     let learningResults: EngineResult = { engine: "learned", results: [] };
     let sqmScores: Record<string, number> = {};
-    const authHeader = req.headers.get("Authorization");
 
-    if (authHeader) {
-      try {
-        const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-        const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
-        const anonClient = createClient(supabaseUrl, anonKey);
-        const token = authHeader.replace("Bearer ", "");
-        const {
-          data: { user },
-        } = await anonClient.auth.getUser(token);
+    try {
+      const serviceClient = createClient(
+        supabaseUrl,
+        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+      );
 
-        if (user) {
-          const serviceClient = createClient(
-            supabaseUrl,
-            Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
-          );
+      // Fetch learning index + SQM in parallel
+      const [learnedRes, sqmRes] = await Promise.all([
+        serviceClient
+          .from("feedback_learning_index")
+          .select("url, title, snippet, learned_score, query_matches")
+          .eq("user_id", authUser.id)
+          .order("learned_score", { ascending: false })
+          .limit(20),
+        serviceClient
+          .from("search_quality_measures")
+          .select("engine, sqm_score")
+          .eq("user_id", authUser.id),
+      ]);
 
-          // Fetch learning index + SQM in parallel
-          const [learnedRes, sqmRes] = await Promise.all([
-            serviceClient
-              .from("feedback_learning_index")
-              .select("url, title, snippet, learned_score, query_matches")
-              .eq("user_id", user.id)
-              .order("learned_score", { ascending: false })
-              .limit(20),
-            serviceClient
-              .from("search_quality_measures")
-              .select("engine, sqm_score")
-              .eq("user_id", user.id),
-          ]);
+      // Process learning index
+      if (learnedRes.data && learnedRes.data.length > 0) {
+        const queryWords = trimmedQuery.toLowerCase().split(/\s+/);
+        const relevant = learnedRes.data.filter((doc) => {
+          const matches = doc.query_matches || [];
+          return matches.some((q: string) => {
+            const matchWords = q.toLowerCase().split(/\s+/);
+            return queryWords.some((w) => matchWords.includes(w));
+          });
+        });
 
-          // Process learning index
-          if (learnedRes.data && learnedRes.data.length > 0) {
-            const queryWords = trimmedQuery.toLowerCase().split(/\s+/);
-            const relevant = learnedRes.data.filter((doc) => {
-              const matches = doc.query_matches || [];
-              return matches.some((q: string) => {
-                const matchWords = q.toLowerCase().split(/\s+/);
-                return queryWords.some((w) => matchWords.includes(w));
-              });
-            });
-
-            learningResults.results = relevant.map((doc, i) => ({
-              position: i + 1,
-              title: doc.title || doc.url,
-              link: doc.url,
-              snippet: doc.snippet || "",
-            }));
-          }
-
-          // Process SQM scores for biased aggregation
-          if (sqmRes.data) {
-            for (const row of sqmRes.data) {
-              sqmScores[row.engine] = row.sqm_score;
-            }
-          }
-        }
-      } catch (e) {
-        console.error("Learning index / SQM query failed:", e);
+        learningResults.results = relevant.map((doc, i) => ({
+          position: i + 1,
+          title: doc.title || doc.url,
+          link: doc.url,
+          snippet: doc.snippet || "",
+        }));
       }
+
+      // Process SQM scores for biased aggregation
+      if (sqmRes.data) {
+        for (const row of sqmRes.data) {
+          sqmScores[row.engine] = row.sqm_score;
+        }
+      }
+    } catch (e) {
+      console.error("Learning index / SQM query failed:", e);
     }
 
     if (learningResults.results.length > 0) {

@@ -1,0 +1,1 @@
+DROP POLICY "Require authentication for profile access" ON public.profiles;
