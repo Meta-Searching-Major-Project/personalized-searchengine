@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import { useLocation } from "react-router-dom";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Search, Loader2 } from "lucide-react";
@@ -20,6 +21,7 @@ export interface ResultWithId extends MergedResult {
 const Index = () => {
   const { user } = useAuth();
   const { toast } = useToast();
+  const location = useLocation();
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState<ResultWithId[]>([]);
@@ -47,6 +49,23 @@ const Index = () => {
         }
       });
   }, [user]);
+
+  // Handle re-run from analytics page
+  const rerunHandled = useRef(false);
+  useEffect(() => {
+    const rerunQuery = (location.state as any)?.rerunQuery;
+    if (rerunQuery && !rerunHandled.current) {
+      rerunHandled.current = true;
+      setQuery(rerunQuery);
+      // Clear the state so it doesn't re-trigger
+      window.history.replaceState({}, document.title);
+      // Auto-submit after a tick
+      setTimeout(() => {
+        const form = document.querySelector("form");
+        if (form) form.requestSubmit();
+      }, 100);
+    }
+  }, [location.state]);
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
