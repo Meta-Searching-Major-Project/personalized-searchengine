@@ -7,6 +7,7 @@ import AppHeader from "@/components/AppHeader";
 import SearchResultCard from "@/components/SearchResultCard";
 import EngineStatusBar from "@/components/EngineStatusBar";
 import { multiSearch, type MergedResult, type EngineSummary } from "@/lib/api/search";
+import { updateLearningIndex } from "@/lib/api/learningIndex";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { useFeedbackTracker } from "@/hooks/useFeedbackTracker";
@@ -26,6 +27,7 @@ const Index = () => {
   const [searchedQuery, setSearchedQuery] = useState("");
   const [queryTime, setQueryTime] = useState<number | undefined>();
   const startTimeRef = useRef<number>(0);
+  const prevHistoryIdRef = useRef<string | null>(null);
 
   const feedback = useFeedbackTracker();
 
@@ -37,6 +39,11 @@ const Index = () => {
     setLoading(true);
     setResults([]);
     setEngineSummary([]);
+    // Process previous session's feedback before starting new search
+    if (prevHistoryIdRef.current) {
+      updateLearningIndex(prevHistoryIdRef.current);
+    }
+
     feedback.resetSession();
     startTimeRef.current = Date.now();
 
@@ -68,11 +75,13 @@ const Index = () => {
       if (historyError) {
         console.error("Failed to save search history:", historyError);
         // Still show results even if persistence fails
+        prevHistoryIdRef.current = null;
         setResults(merged.map((m) => ({ ...m, resultIds: {} })));
         return;
       }
 
       if (historyRow && merged.length > 0) {
+        prevHistoryIdRef.current = historyRow.id;
         const resultRows: {
           search_history_id: string;
           engine: string;
@@ -135,6 +144,18 @@ const Index = () => {
       setLoading(false);
     }
   };
+
+  // Process learning index on page unload for the last session
+  useEffect(() => {
+    const handleUnload = () => {
+      if (prevHistoryIdRef.current) {
+        // Fire-and-forget via sendBeacon fallback
+        updateLearningIndex(prevHistoryIdRef.current);
+      }
+    };
+    window.addEventListener("beforeunload", handleUnload);
+    return () => window.removeEventListener("beforeunload", handleUnload);
+  }, []);
 
   const hasResults = results.length > 0;
 
