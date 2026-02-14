@@ -26,10 +26,27 @@ const Index = () => {
   const [engineSummary, setEngineSummary] = useState<EngineSummary[]>([]);
   const [searchedQuery, setSearchedQuery] = useState("");
   const [queryTime, setQueryTime] = useState<number | undefined>();
+  const [aggregationMethod, setAggregationMethod] = useState("borda");
+  const [usedMethod, setUsedMethod] = useState<string | undefined>();
   const startTimeRef = useRef<number>(0);
   const prevHistoryIdRef = useRef<string | null>(null);
 
   const feedback = useFeedbackTracker();
+
+  // Fetch user's preferred aggregation method
+  useEffect(() => {
+    if (!user) return;
+    supabase
+      .from("profiles")
+      .select("default_aggregation_method")
+      .eq("id", user.id)
+      .single()
+      .then(({ data }) => {
+        if (data?.default_aggregation_method) {
+          setAggregationMethod(data.default_aggregation_method);
+        }
+      });
+  }, [user]);
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -48,9 +65,10 @@ const Index = () => {
     startTimeRef.current = Date.now();
 
     try {
-      const response = await multiSearch(trimmed);
+      const response = await multiSearch(trimmed, aggregationMethod);
       const elapsed = Date.now() - startTimeRef.current;
       setQueryTime(elapsed);
+      setUsedMethod(response.aggregation_method);
 
       if (!response.success) {
         toast({
@@ -223,6 +241,7 @@ const Index = () => {
                 engines={engineSummary}
                 totalResults={results.length}
                 queryTime={queryTime}
+                aggregationMethod={usedMethod}
               />
               <div className="space-y-2 pb-8">
                 {results.map((result, i) => (
