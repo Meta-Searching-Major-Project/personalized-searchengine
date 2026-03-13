@@ -21,6 +21,7 @@ export interface ResultWithId extends MergedResult {
 const Index = () => {
   const { user } = useAuth();
   const { toast } = useToast();
+  const navigate = useNavigate();
   const location = useLocation();
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
