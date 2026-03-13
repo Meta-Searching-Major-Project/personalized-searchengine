@@ -273,6 +273,22 @@ export type Database = {
         }
         Returns: boolean
       }
+      match_learned_documents: {
+        Args: {
+          match_count?: number
+          match_threshold?: number
+          match_user_id: string
+          query_embedding: string
+        }
+        Returns: {
+          id: string
+          learned_score: number
+          similarity: number
+          snippet: string
+          title: string
+          url: string
+        }[]
+      }
     }
     Enums: {
       app_role: "admin" | "user"
