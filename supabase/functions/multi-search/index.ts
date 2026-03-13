@@ -483,6 +483,7 @@ Deno.serve(async (req) => {
     } catch (e) {
       console.error("Learning index / SQM query failed:", e);
     }
+    } // end if (authUser)
 
     if (learningResults.results.length > 0) {
       engineResults.push(learningResults);
