@@ -305,35 +305,23 @@ Deno.serve(async (req) => {
   }
 
   try {
-    // Validate authentication
+    // Authentication is optional — guests get basic results, signed-in users get personalization
     const authHeader = req.headers.get("Authorization");
-    if (!authHeader) {
-      return new Response(
-        JSON.stringify({ success: false, error: "Unauthorized" }),
-        {
-          status: 401,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        }
-      );
-    }
-
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
-    const authClient = createClient(supabaseUrl, anonKey);
-    const token = authHeader.replace("Bearer ", "");
-    const {
-      data: { user: authUser },
-      error: authError,
-    } = await authClient.auth.getUser(token);
+    let authUser: { id: string } | null = null;
 
-    if (authError || !authUser) {
-      return new Response(
-        JSON.stringify({ success: false, error: "Invalid authentication" }),
-        {
-          status: 401,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
+    if (authHeader && authHeader.startsWith("Bearer ")) {
+      try {
+        const authClient = createClient(supabaseUrl, anonKey);
+        const token = authHeader.replace("Bearer ", "");
+        const { data: { user }, error: authError } = await authClient.auth.getUser(token);
+        if (!authError && user) {
+          authUser = user;
         }
-      );
+      } catch (e) {
+        console.warn("Auth validation failed, proceeding as guest:", e);
+      }
     }
 
     const { query, aggregation_method } = await req.json();
@@ -390,6 +378,8 @@ Deno.serve(async (req) => {
     let learningResults: EngineResult = { engine: "learned", results: [] };
     let sqmScores: Record<string, number> = {};
 
+    // Only personalize for authenticated users
+    if (authUser) {
     try {
       const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
       const serviceClient = createClient(supabaseUrl, serviceKey);
@@ -493,6 +483,7 @@ Deno.serve(async (req) => {
     } catch (e) {
       console.error("Learning index / SQM query failed:", e);
     }
+    } // end if (authUser)
 
     if (learningResults.results.length > 0) {
       engineResults.push(learningResults);

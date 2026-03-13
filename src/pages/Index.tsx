@@ -1,8 +1,8 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Search, Loader2 } from "lucide-react";
+import { Search, Loader2, LogIn } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import AppHeader from "@/components/AppHeader";
 import SearchResultCard from "@/components/SearchResultCard";
@@ -21,6 +21,7 @@ export interface ResultWithId extends MergedResult {
 const Index = () => {
   const { user } = useAuth();
   const { toast } = useToast();
+  const navigate = useNavigate();
   const location = useLocation();
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
@@ -70,18 +71,19 @@ const Index = () => {
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = query.trim();
-    if (!trimmed || !user) return;
+    if (!trimmed) return;
+    const isGuest = !user;
 
     setLoading(true);
     setResults([]);
     setEngineSummary([]);
-    // Process previous session's feedback before starting new search
-    if (prevHistoryIdRef.current) {
+    // Process previous session's feedback before starting new search (signed-in only)
+    if (!isGuest && prevHistoryIdRef.current) {
       updateLearningIndex(prevHistoryIdRef.current);
       computeSQM(prevHistoryIdRef.current);
     }
 
-    feedback.resetSession();
+    if (!isGuest) feedback.resetSession();
     startTimeRef.current = Date.now();
 
     try {
@@ -101,9 +103,13 @@ const Index = () => {
 
       const merged = response.merged || [];
       setEngineSummary(response.engineResults || []);
-      setSearchedQuery(trimmed);
+      // Guest users: show results without persistence
+      if (isGuest) {
+        setResults(merged.map((m) => ({ ...m, resultIds: {} })));
+        return;
+      }
 
-      // Persist search history and results, then map IDs back
+      // Persist search history and results for signed-in users
       const { data: historyRow, error: historyError } = await supabase
         .from("search_history")
         .insert({ query: trimmed, user_id: user.id })
@@ -112,7 +118,6 @@ const Index = () => {
 
       if (historyError) {
         console.error("Failed to save search history:", historyError);
-        // Still show results even if persistence fails
         prevHistoryIdRef.current = null;
         setResults(merged.map((m) => ({ ...m, resultIds: {} })));
         return;
@@ -155,7 +160,6 @@ const Index = () => {
           return;
         }
 
-        // Build a map: url → { engine → id }
         const idMap = new Map<string, Record<string, string>>();
         insertedResults?.forEach((r) => {
           if (!idMap.has(r.url)) idMap.set(r.url, {});
@@ -236,10 +240,21 @@ const Index = () => {
           </form>
 
           {!hasResults && !loading && (
-            <p className="mt-4 text-xs text-muted-foreground">
-              Aggregates results from Google, Bing &amp; DuckDuckGo using fuzzy rank
-              aggregation
-            </p>
+            <div className="mt-4 space-y-2">
+              <p className="text-xs text-muted-foreground">
+                Aggregates results from Google, Bing &amp; DuckDuckGo using fuzzy rank
+                aggregation
+              </p>
+              {!user && (
+                <button
+                  onClick={() => navigate("/auth")}
+                  className="inline-flex items-center gap-1.5 rounded-full bg-primary/10 px-3 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/20"
+                >
+                  <LogIn className="h-3 w-3" />
+                  Sign in for personalized results &amp; search history
+                </button>
+              )}
+            </div>
           )}
 
           {loading && (
@@ -264,6 +279,15 @@ const Index = () => {
                 queryTime={queryTime}
                 aggregationMethod={usedMethod}
               />
+              {!user && (
+                <button
+                  onClick={() => navigate("/auth")}
+                  className="flex w-full items-center justify-center gap-1.5 rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-xs font-medium text-primary transition-colors hover:bg-primary/10"
+                >
+                  <LogIn className="h-3 w-3" />
+                  Sign in to save history &amp; get personalized results
+                </button>
+              )}
               <div className="space-y-2 pb-8">
                 {results.map((result, i) => (
                   <SearchResultCard
