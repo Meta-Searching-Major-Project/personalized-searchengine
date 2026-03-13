@@ -378,6 +378,8 @@ Deno.serve(async (req) => {
     let learningResults: EngineResult = { engine: "learned", results: [] };
     let sqmScores: Record<string, number> = {};
 
+    // Only personalize for authenticated users
+    if (authUser) {
     try {
       const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
       const serviceClient = createClient(supabaseUrl, serviceKey);
