@@ -70,7 +70,8 @@ const Index = () => {
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = query.trim();
-    if (!trimmed || !user) return;
+    if (!trimmed) return;
+    const isGuest = !user;
 
     setLoading(true);
     setResults([]);
