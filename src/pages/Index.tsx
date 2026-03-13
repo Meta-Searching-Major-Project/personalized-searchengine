@@ -279,6 +279,15 @@ const Index = () => {
                 queryTime={queryTime}
                 aggregationMethod={usedMethod}
               />
+              {!user && (
+                <button
+                  onClick={() => navigate("/auth")}
+                  className="flex w-full items-center justify-center gap-1.5 rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-xs font-medium text-primary transition-colors hover:bg-primary/10"
+                >
+                  <LogIn className="h-3 w-3" />
+                  Sign in to save history &amp; get personalized results
+                </button>
+              )}
               <div className="space-y-2 pb-8">
                 {results.map((result, i) => (
                   <SearchResultCard
