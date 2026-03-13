@@ -76,13 +76,13 @@ const Index = () => {
     setLoading(true);
     setResults([]);
     setEngineSummary([]);
-    // Process previous session's feedback before starting new search
-    if (prevHistoryIdRef.current) {
+    // Process previous session's feedback before starting new search (signed-in only)
+    if (!isGuest && prevHistoryIdRef.current) {
       updateLearningIndex(prevHistoryIdRef.current);
       computeSQM(prevHistoryIdRef.current);
     }
 
-    feedback.resetSession();
+    if (!isGuest) feedback.resetSession();
     startTimeRef.current = Date.now();
 
     try {
