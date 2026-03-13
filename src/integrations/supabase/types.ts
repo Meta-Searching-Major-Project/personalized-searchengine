@@ -16,6 +16,7 @@ export type Database = {
     Tables: {
       feedback_learning_index: {
         Row: {
+          embedding: string | null
           id: string
           learned_score: number
           query_matches: string[] | null
@@ -26,6 +27,7 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          embedding?: string | null
           id?: string
           learned_score?: number
           query_matches?: string[] | null
@@ -36,6 +38,7 @@ export type Database = {
           user_id: string
         }
         Update: {
+          embedding?: string | null
           id?: string
           learned_score?: number
           query_matches?: string[] | null
