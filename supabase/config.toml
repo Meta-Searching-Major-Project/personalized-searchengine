@@ -1,1 +1,4 @@
 project_id = "dzprofmqqwokcmatugha"
+
+[functions.generate-embedding]
+verify_jwt = false
