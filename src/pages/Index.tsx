@@ -102,9 +102,13 @@ const Index = () => {
 
       const merged = response.merged || [];
       setEngineSummary(response.engineResults || []);
-      setSearchedQuery(trimmed);
+      // Guest users: show results without persistence
+      if (isGuest) {
+        setResults(merged.map((m) => ({ ...m, resultIds: {} })));
+        return;
+      }
 
-      // Persist search history and results, then map IDs back
+      // Persist search history and results for signed-in users
       const { data: historyRow, error: historyError } = await supabase
         .from("search_history")
         .insert({ query: trimmed, user_id: user.id })
@@ -113,7 +117,6 @@ const Index = () => {
 
       if (historyError) {
         console.error("Failed to save search history:", historyError);
-        // Still show results even if persistence fails
         prevHistoryIdRef.current = null;
         setResults(merged.map((m) => ({ ...m, resultIds: {} })));
         return;
@@ -156,7 +159,6 @@ const Index = () => {
           return;
         }
 
-        // Build a map: url → { engine → id }
         const idMap = new Map<string, Record<string, string>>();
         insertedResults?.forEach((r) => {
           if (!idMap.has(r.url)) idMap.set(r.url, {});
