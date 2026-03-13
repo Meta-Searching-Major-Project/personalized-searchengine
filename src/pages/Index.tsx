@@ -240,10 +240,21 @@ const Index = () => {
           </form>
 
           {!hasResults && !loading && (
-            <p className="mt-4 text-xs text-muted-foreground">
-              Aggregates results from Google, Bing &amp; DuckDuckGo using fuzzy rank
-              aggregation
-            </p>
+            <div className="mt-4 space-y-2">
+              <p className="text-xs text-muted-foreground">
+                Aggregates results from Google, Bing &amp; DuckDuckGo using fuzzy rank
+                aggregation
+              </p>
+              {!user && (
+                <button
+                  onClick={() => navigate("/auth")}
+                  className="inline-flex items-center gap-1.5 rounded-full bg-primary/10 px-3 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/20"
+                >
+                  <LogIn className="h-3 w-3" />
+                  Sign in for personalized results &amp; search history
+                </button>
+              )}
+            </div>
           )}
 
           {loading && (
