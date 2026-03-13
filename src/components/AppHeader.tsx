@@ -1,19 +1,21 @@
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { useNavigate, useLocation } from "react-router-dom";
-import { Search, Settings, BarChart3, LogOut } from "lucide-react";
+import { Search, Settings, BarChart3, LogOut, LogIn } from "lucide-react";
 
 const AppHeader = () => {
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
 
-  if (!user) return null;
-
   const navItems = [
     { path: "/", icon: Search, label: "Search" },
-    { path: "/settings", icon: Settings, label: "Settings" },
-    { path: "/analytics", icon: BarChart3, label: "Analytics" },
+    ...(user
+      ? [
+          { path: "/settings", icon: Settings, label: "Settings" },
+          { path: "/analytics", icon: BarChart3, label: "Analytics" },
+        ]
+      : []),
   ];
 
   return (
@@ -37,9 +39,16 @@ const AppHeader = () => {
               <span className="hidden sm:inline">{label}</span>
             </Button>
           ))}
-          <Button variant="ghost" size="sm" onClick={signOut}>
-            <LogOut className="h-4 w-4" />
-          </Button>
+          {user ? (
+            <Button variant="ghost" size="sm" onClick={signOut}>
+              <LogOut className="h-4 w-4" />
+            </Button>
+          ) : (
+            <Button variant="default" size="sm" onClick={() => navigate("/auth")}>
+              <LogIn className="h-4 w-4" />
+              <span className="hidden sm:inline">Sign In</span>
+            </Button>
+          )}
         </nav>
       </div>
     </header>
