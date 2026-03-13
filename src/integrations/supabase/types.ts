@@ -16,6 +16,7 @@ export type Database = {
     Tables: {
       feedback_learning_index: {
         Row: {
+          embedding: string | null
           id: string
           learned_score: number
           query_matches: string[] | null
@@ -26,6 +27,7 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          embedding?: string | null
           id?: string
           learned_score?: number
           query_matches?: string[] | null
@@ -36,6 +38,7 @@ export type Database = {
           user_id: string
         }
         Update: {
+          embedding?: string | null
           id?: string
           learned_score?: number
           query_matches?: string[] | null
@@ -269,6 +272,22 @@ export type Database = {
           _user_id: string
         }
         Returns: boolean
+      }
+      match_learned_documents: {
+        Args: {
+          match_count?: number
+          match_threshold?: number
+          match_user_id: string
+          query_embedding: string
+        }
+        Returns: {
+          id: string
+          learned_score: number
+          similarity: number
+          snippet: string
+          title: string
+          url: string
+        }[]
       }
     }
     Enums: {

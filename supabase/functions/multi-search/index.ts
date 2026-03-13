@@ -386,47 +386,102 @@ Deno.serve(async (req) => {
 
     const engineResults = [google, bing, duckduckgo];
 
-    // (N+1)-th source: query the feedback learning index for this user
+    // (N+1)-th source: query the feedback learning index using embedding similarity
     let learningResults: EngineResult = { engine: "learned", results: [] };
     let sqmScores: Record<string, number> = {};
 
     try {
-      const serviceClient = createClient(
-        supabaseUrl,
-        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
-      );
+      const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+      const serviceClient = createClient(supabaseUrl, serviceKey);
 
-      // Fetch learning index + SQM in parallel
-      const [learnedRes, sqmRes] = await Promise.all([
-        serviceClient
-          .from("feedback_learning_index")
-          .select("url, title, snippet, learned_score, query_matches")
-          .eq("user_id", authUser.id)
-          .order("learned_score", { ascending: false })
-          .limit(20),
+      // Generate query embedding + fetch SQM in parallel
+      const embeddingPromise = (async () => {
+        try {
+          const resp = await fetch(`${supabaseUrl}/functions/v1/generate-embedding`, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${serviceKey}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ text: trimmedQuery }),
+          });
+          if (resp.ok) {
+            const data = await resp.json();
+            return data.embedding as number[] | null;
+          }
+          console.error("Query embedding failed:", resp.status);
+          return null;
+        } catch (e) {
+          console.error("Query embedding error:", e);
+          return null;
+        }
+      })();
+
+      const [queryEmbedding, sqmRes] = await Promise.all([
+        embeddingPromise,
         serviceClient
           .from("search_quality_measures")
           .select("engine, sqm_score")
           .eq("user_id", authUser.id),
       ]);
 
-      // Process learning index
-      if (learnedRes.data && learnedRes.data.length > 0) {
-        const queryWords = trimmedQuery.toLowerCase().split(/\s+/);
-        const relevant = learnedRes.data.filter((doc) => {
-          const matches = doc.query_matches || [];
-          return matches.some((q: string) => {
-            const matchWords = q.toLowerCase().split(/\s+/);
-            return queryWords.some((w) => matchWords.includes(w));
-          });
-        });
+      // Use cosine similarity if embedding available, fallback to keyword matching
+      if (queryEmbedding) {
+        const embeddingStr = `[${queryEmbedding.join(",")}]`;
+        const { data: matchedDocs, error: matchError } = await serviceClient.rpc(
+          "match_learned_documents",
+          {
+            query_embedding: embeddingStr,
+            match_user_id: authUser.id,
+            match_threshold: 0.2,
+            match_count: 20,
+          }
+        );
 
-        learningResults.results = relevant.map((doc, i) => ({
-          position: i + 1,
-          title: doc.title || doc.url,
-          link: doc.url,
-          snippet: doc.snippet || "",
-        }));
+        if (matchError) {
+          console.error("Vector search error:", matchError);
+        } else if (matchedDocs && matchedDocs.length > 0) {
+          // Blend: final_rank_score = similarity * 0.6 + normalized_learned_score * 0.4
+          const maxLearnedScore = Math.max(...matchedDocs.map((d: any) => d.learned_score), 0.01);
+          const scored = matchedDocs.map((d: any) => ({
+            ...d,
+            blended: d.similarity * 0.6 + (d.learned_score / maxLearnedScore) * 0.4,
+          }));
+          scored.sort((a: any, b: any) => b.blended - a.blended);
+
+          learningResults.results = scored.map((doc: any, i: number) => ({
+            position: i + 1,
+            title: doc.title || doc.url,
+            link: doc.url,
+            snippet: doc.snippet || "",
+          }));
+        }
+      } else {
+        // Fallback: keyword-based matching (original behavior)
+        const { data: learnedRes } = await serviceClient
+          .from("feedback_learning_index")
+          .select("url, title, snippet, learned_score, query_matches")
+          .eq("user_id", authUser.id)
+          .order("learned_score", { ascending: false })
+          .limit(20);
+
+        if (learnedRes && learnedRes.length > 0) {
+          const queryWords = trimmedQuery.toLowerCase().split(/\s+/);
+          const relevant = learnedRes.filter((doc) => {
+            const matches = doc.query_matches || [];
+            return matches.some((q: string) => {
+              const matchWords = q.toLowerCase().split(/\s+/);
+              return queryWords.some((w) => matchWords.includes(w));
+            });
+          });
+
+          learningResults.results = relevant.map((doc, i) => ({
+            position: i + 1,
+            title: doc.title || doc.url,
+            link: doc.url,
+            snippet: doc.snippet || "",
+          }));
+        }
       }
 
       // Process SQM scores for biased aggregation
