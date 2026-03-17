@@ -77,6 +77,7 @@ const Index = () => {
     setLoading(true);
     setResults([]);
     setEngineSummary([]);
+    setSearchedQuery(trimmed);
     // Process previous session's feedback before starting new search (signed-in only)
     if (!isGuest && prevHistoryIdRef.current) {
       updateLearningIndex(prevHistoryIdRef.current);
