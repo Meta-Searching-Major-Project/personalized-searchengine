@@ -45,6 +45,11 @@ const EngineStatusBar = ({ engines, totalResults, queryTime, aggregationMethod }
           <Badge variant="outline" className="h-4 px-1 text-[10px]">
             {e.count}
           </Badge>
+          {e.cached && (
+            <Badge variant="secondary" className="h-4 px-1 text-[9px]" title="Served from cache">
+              ⚡
+            </Badge>
+          )}
         </div>
       ))}
     </div>

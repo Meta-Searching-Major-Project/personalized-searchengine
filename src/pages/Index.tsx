@@ -7,7 +7,8 @@ import { useToast } from "@/hooks/use-toast";
 import AppHeader from "@/components/AppHeader";
 import SearchResultCard from "@/components/SearchResultCard";
 import EngineStatusBar from "@/components/EngineStatusBar";
-import { multiSearch, type MergedResult, type EngineSummary } from "@/lib/api/search";
+import RichWidgets from "@/components/RichWidgets";
+import { multiSearch, type MergedResult, type EngineSummary, type RichBlocks } from "@/lib/api/search";
 import { updateLearningIndex, computeSQM } from "@/lib/api/learningIndex";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
@@ -27,6 +28,7 @@ const Index = () => {
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState<ResultWithId[]>([]);
   const [engineSummary, setEngineSummary] = useState<EngineSummary[]>([]);
+  const [richBlocks, setRichBlocks] = useState<RichBlocks | undefined>();
   const [searchedQuery, setSearchedQuery] = useState("");
   const [queryTime, setQueryTime] = useState<number | undefined>();
   const [aggregationMethod, setAggregationMethod] = useState("borda");
@@ -77,6 +79,7 @@ const Index = () => {
     setLoading(true);
     setResults([]);
     setEngineSummary([]);
+    setRichBlocks(undefined);
     setSearchedQuery(trimmed);
     // Process previous session's feedback before starting new search (signed-in only)
     if (!isGuest && prevHistoryIdRef.current) {
@@ -104,6 +107,7 @@ const Index = () => {
 
       const merged = response.merged || [];
       setEngineSummary(response.engineResults || []);
+      setRichBlocks(response.richBlocks);
       // Guest users: show results without persistence
       if (isGuest) {
         setResults(merged.map((m) => ({ ...m, resultIds: {} })));
@@ -280,6 +284,7 @@ const Index = () => {
                 queryTime={queryTime}
                 aggregationMethod={usedMethod}
               />
+              <RichWidgets blocks={richBlocks} />
               {!user && (
                 <button
                   onClick={() => navigate("/auth")}
