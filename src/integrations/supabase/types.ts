@@ -98,6 +98,33 @@ export type Database = {
         }
         Relationships: []
       }
+      search_cache: {
+        Row: {
+          engine: string
+          fetched_at: string
+          id: string
+          organic_results: Json
+          query_normalized: string
+          rich_blocks: Json
+        }
+        Insert: {
+          engine: string
+          fetched_at?: string
+          id?: string
+          organic_results?: Json
+          query_normalized: string
+          rich_blocks?: Json
+        }
+        Update: {
+          engine?: string
+          fetched_at?: string
+          id?: string
+          organic_results?: Json
+          query_normalized?: string
+          rich_blocks?: Json
+        }
+        Relationships: []
+      }
       search_history: {
         Row: {
           created_at: string
