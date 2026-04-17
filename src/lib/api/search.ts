@@ -16,6 +16,15 @@ export interface EngineSummary {
   engine: string;
   count: number;
   error?: string;
+  cached?: boolean;
+}
+
+export interface RichBlocks {
+  weather?: any;
+  dictionary?: any;
+  images?: any[];
+  knowledge_graph?: any;
+  answer_box?: any;
 }
 
 export interface SearchResponse {
@@ -24,6 +33,7 @@ export interface SearchResponse {
   aggregation_method?: string;
   merged?: MergedResult[];
   engineResults?: EngineSummary[];
+  richBlocks?: RichBlocks;
   error?: string;
 }
 
