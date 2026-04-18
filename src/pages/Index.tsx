@@ -84,8 +84,17 @@ const Index = () => {
     setSearchedQuery(trimmed);
     // Process previous session's feedback before starting new search (signed-in only)
     if (!isGuest && prevHistoryIdRef.current) {
-      updateLearningIndex(prevHistoryIdRef.current);
-      computeSQM(prevHistoryIdRef.current);
+      // 1. Tell extension to flush current dwell times to DB
+      window.postMessage({ type: "PERSONASEARCH_FLUSH_DWELL" }, "*");
+
+      // 2. Wait a tiny bit for the extension's POST request to hit Supabase
+      await new Promise(resolve => setTimeout(resolve, 300));
+
+      // 3. Process the feedback and update indexes
+      await Promise.all([
+        updateLearningIndex(prevHistoryIdRef.current),
+        computeSQM(prevHistoryIdRef.current)
+      ]);
     }
 
     if (!isGuest) feedback.resetSession();

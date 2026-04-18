@@ -13,7 +13,7 @@
   // The web app uses window.postMessage to tell us about tracked URLs
   window.addEventListener("message", (event) => {
     // Only accept messages from the PersonaSearch app
-    if (event.data?.type === "PERSONASEARCH_TRACK_START") {
+    if (event.data?.type === "PERSONASEARCH_TRACK_START" || event.data?.type === "PERSONASEARCH_FLUSH_DWELL") {
       chrome.runtime.sendMessage(event.data).catch(() => {});
     }
 

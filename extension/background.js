@@ -95,6 +95,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     });
     return true;
   }
+
+  if (msg.type === "PERSONASEARCH_FLUSH_DWELL") {
+    // Pause all timers temporarily to ensure totalMs is accurate
+    for (const [id, entry] of trackedTabs) {
+      const wasActive = entry.activeStart !== null;
+      if (wasActive) pauseTimer(id);
+      reportCurrentState(id);
+      if (wasActive) entry.activeStart = Date.now(); // resume
+    }
+    sendResponse({ ok: true });
+    return true;
+  }
 });
 
 // ─── Tab Events ────────────────────────────────────────────────────
@@ -215,9 +227,8 @@ function normalizeUrl(url) {
 
 // ─── Report Dwell Time to Supabase ─────────────────────────────────
 
-async function reportAndRemove(tabId) {
+async function reportCurrentState(tabId) {
   const entry = trackedTabs.get(tabId);
-  trackedTabs.delete(tabId);
   if (!entry || !entry.searchResultId) return;
 
   // Minimum 1 second to count as a real visit
@@ -256,6 +267,11 @@ async function reportAndRemove(tabId) {
   } catch (e) {
     console.error("PersonaSearch: Report error:", e);
   }
+}
+
+async function reportAndRemove(tabId) {
+  await reportCurrentState(tabId);
+  trackedTabs.delete(tabId);
 }
 
 // ─── Initialization ────────────────────────────────────────────────
