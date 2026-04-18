@@ -9,8 +9,8 @@ A personalized meta-search engine that queries multiple search engines in parall
 - **Routing**: React Router
 - **State**: React Query + local React state
 - **Backend (Lovable Cloud)**: Supabase Postgres + Auth + Edge Functions (Deno)
-- **Search provider**: SerpApi (Google, Bing, DuckDuckGo, Yahoo, Yandex, Baidu)
-- **Embeddings / AI**: Lovable AI Gateway (Gemini Flash Lite, 768-dim vectors)
+- **Search provider**: SerpApi (Google, Bing, DuckDuckGo, Yahoo, Yandex, Baidu, Naver, Brave, Google Scholar, Google News)
+- **Embeddings / AI**: Google Generative Language API (gemini-embedding-001, 768-dim vectors via MRL)
 
 ---
 
@@ -133,10 +133,12 @@ Project ID + per-function settings (`verify_jwt`). Auto-managed.
 
 | Function | Description |
 |---|---|
-| `multi-search/index.ts` | **The core**. Accepts `{ query, aggregation_method }`. For each of 6 web engines (Google, Bing, DuckDuckGo, Yahoo, Yandex, Baidu): checks `search_cache` table (7-day TTL); on miss, calls SerpApi and upserts cache. Extracts rich blocks (weather/dictionary/images/KG/answer box). For signed-in users, also embeds the query and pulls personalized docs from `feedback_learning_index` as an (N+1)-th source. Deduplicates by URL, then runs the chosen rank-aggregation algorithm (Borda / Shimura / Modal / MFO / MBV / OWA / Biased). Returns merged results + engineSummary + richBlocks. |
-| `generate-embedding/index.ts` | Calls Lovable AI Gateway → returns 768-dim Gemini embedding for arbitrary text. Used to vectorize queries and learned documents. |
-| `update-learning-index/index.ts` | After a search session, computes per-document importance score `r_j` from the 7-tuple feedback, then upserts into `feedback_learning_index` using exponential moving average (α=0.3). Also generates + stores the doc embedding. |
+| `multi-search/index.ts` | **The core**. Accepts `{ query, aggregation_method }`. For each of 10 web engines: checks `search_cache` (7-day TTL); on miss, calls SerpApi and upserts cache. Extracts rich blocks. For signed-in users, embeds the query and pulls personalized docs. Queries the local `web_pages` index (if ≥100 crawled pages) as an additional engine. Deduplicates, runs rank aggregation, returns results. After responding, **fire-and-forget queues** all result URLs into `crawl_queue` and triggers `crawl-page`. |
+| `generate-embedding/index.ts` | Calls Google Generative Language API (gemini-embedding-001) → returns 768-dim embedding for arbitrary text. Supports `task_type` (RETRIEVAL_QUERY / RETRIEVAL_DOCUMENT) and exponential backoff retry. |
+| `update-learning-index/index.ts` | After a search session, computes per-document importance score `r_j` from the 7-tuple feedback, then upserts into `feedback_learning_index` using exponential moving average (α=0.3). Chunks long texts (>2000 chars) before embedding. |
 | `compute-sqm/index.ts` | Computes Spearman rank-order correlation between user's preference ranking R and each engine's original ranking q. Updates `search_quality_measures` with running average. |
+| **`crawl-page/index.ts`** | **NEW** — Processes the `crawl_queue`: fetches pages (10s timeout, browser UA), extracts clean text (strips HTML/scripts/styles), computes SHA-256 content hash for dedup, generates 768-dim embeddings, upserts into `web_pages`. Processes batches of 5–10 URLs with politeness delays. |
+| **`search-local-index/index.ts`** | **NEW** — Hybrid search over the local `web_pages` index. Embeds the query, runs vector similarity (60%) + full-text tsvector search (40%), returns results in SerpResult format. |
 
 ---
 
@@ -151,18 +153,23 @@ Project ID + per-function settings (`verify_jwt`). Auto-managed.
 | `user_feedback` | The 7-tuple recorded per `search_result_id`: click_order, dwell_time_ms, printed, saved, bookmarked, emailed, copy_paste_chars. |
 | `search_quality_measures` | Per-user, per-engine SQM score (rolling Spearman ρ) + query count. |
 | `feedback_learning_index` | The "world wide web index built from your behavior" — URL + title + snippet + 768-dim embedding + learned_score + matching queries. Acts as the (N+1)-th search engine. |
-| **`search_cache`** | **NEW** — global shared cache of raw SerpApi results per (query, engine). 7-day TTL. Lets repeat queries skip SerpApi entirely (= faster + cheaper). Anyone can read; only edge functions write. Indexed on `query_normalized` for sub-millisecond lookup. |
+| `search_cache` | Global shared cache of raw SerpApi results per (query, engine). 7-day TTL. Indexed on `query_normalized`. |
+| **`web_pages`** | **NEW** — The local web index. Stores URL, domain, extracted text, meta description, content hash (SHA-256 dedup), 768-dim embedding, tsvector (full-text), word count, crawl metadata. HNSW + GIN indexed. Grows with every search as URLs are crawled. |
+| **`crawl_queue`** | **NEW** — Lightweight job queue for pages to crawl. URLs are inserted by `multi-search` after each search, processed by `crawl-page`. Tracks priority (more engines = higher), attempt count, and status. |
 
 ### Database functions
 - `has_role(user_id, role)` — security-definer role check, used in RLS policies.
 - `match_learned_documents(query_embedding, user_id, threshold, count)` — vector cosine search over `feedback_learning_index`.
+- `search_local_index(query_embedding, query_text, match_count)` — hybrid vector + full-text search over `web_pages`.
 - `handle_new_user()` — trigger that creates a `profiles` + `user_roles` row when a new auth user signs up.
 - `update_updated_at_column()` — generic timestamp trigger.
+- `web_pages_tsv_trigger()` — auto-updates tsvector column on `web_pages` insert/update.
 
 ### RLS posture
 - `search_history`, `user_feedback`, `feedback_learning_index`, `search_quality_measures`, `profiles`, `user_roles` → users see their own rows; admins see all.
 - `search_results` → users see rows linked to their own `search_history`.
-- `search_cache` → readable by anyone (it's a shared cache); writes locked to service role.
+- `search_cache`, `web_pages` → readable by anyone (shared resources); writes locked to service role.
+- `crawl_queue` → service role only (no client-side access).
 
 ---
 
@@ -205,7 +212,7 @@ Index.tsx
 
 ## How to extend
 
-- **Add another search engine**: add to `WEB_ENGINES` array in `multi-search/index.ts`. SerpApi engine names: `naver`, `brave`, `ecosia`, `youtube`, `google_news`, `google_scholar`, `google_shopping`, etc.
+- **Add another search engine**: add an `EngineConfig` entry to the `WEB_ENGINES` array in `multi-search/index.ts` with optional `queryParam`, `extraParams`, `resultsKey`, and `parseResult` fields. SerpApi engine names: `youtube`, `google_shopping`, `ecosia` (mirrors Bing), etc.
 - **Add a new rich widget**: add the field in `extractRichBlocks()` in the edge function + update `RichBlocks` type in `src/lib/api/search.ts` + add a renderer in `src/components/RichWidgets.tsx`.
 - **Add a new aggregation method**: add a function in `multi-search/index.ts` and a case in `rankResults()` + label in `src/components/EngineStatusBar.tsx`.
 - **Tune cache TTL**: change `CACHE_TTL_MS` in `multi-search/index.ts` (currently 7 days).

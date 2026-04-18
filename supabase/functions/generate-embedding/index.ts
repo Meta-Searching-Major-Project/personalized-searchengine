@@ -7,91 +7,119 @@ const corsHeaders = {
 };
 
 /**
- * Generates a 768-dimensional embedding for a given text using Lovable AI (Gemini Flash).
- * Uses tool calling to extract a structured numeric vector from the model.
+ * Generates 768-dimensional embeddings using Google's dedicated embedding model
+ * (gemini-embedding-001) via the Generative Language REST API.
  *
- * Accepts: { text: string } or { texts: string[] }
- * Returns: { embedding: number[] } or { embeddings: number[][] }
+ * This uses a purpose-built embedding model — NOT a generative text model —
+ * guaranteeing semantically consistent, deterministic vectors.
+ *
+ * Accepts:
+ *   { text: string, task_type?: string }           → { embedding: number[] }
+ *   { texts: string[], task_type?: string }         → { embeddings: number[][] }
+ *
+ * task_type values:
+ *   "RETRIEVAL_QUERY"    — for search queries (default)
+ *   "RETRIEVAL_DOCUMENT" — for document content being indexed
+ *   "SEMANTIC_SIMILARITY" — for comparing text similarity
+ *   "CLASSIFICATION"     — for text classification tasks
  */
 
-async function generateEmbedding(text: string, apiKey: string): Promise<number[]> {
-  const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
+const EMBEDDING_MODEL = "gemini-embedding-001";
+const EMBEDDING_DIMENSIONS = 768;
+const MAX_RETRIES = 3;
+const MAX_INPUT_CHARS = 8000; // gemini-embedding-001 input limit safety margin
+
+type TaskType =
+  | "RETRIEVAL_QUERY"
+  | "RETRIEVAL_DOCUMENT"
+  | "SEMANTIC_SIMILARITY"
+  | "CLASSIFICATION";
+
+/**
+ * Calls the Google Generative Language API embedContent endpoint.
+ * Returns a 768-dimensional embedding vector.
+ */
+async function generateEmbedding(
+  text: string,
+  apiKey: string,
+  taskType: TaskType = "RETRIEVAL_QUERY"
+): Promise<number[]> {
+  // Truncate input to stay within model limits
+  const truncatedText = text.slice(0, MAX_INPUT_CHARS);
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${EMBEDDING_MODEL}:embedContent?key=${apiKey}`;
+
+  const body = {
+    model: `models/${EMBEDDING_MODEL}`,
+    content: {
+      parts: [{ text: truncatedText }],
     },
-    body: JSON.stringify({
-      model: "google/gemini-2.5-flash-lite",
-      messages: [
-        {
-          role: "system",
-          content: `You are an embedding generator. Given text, produce a 768-dimensional unit-normalized embedding vector that captures the semantic meaning. Call the store_embedding function with the vector. Focus on topical/semantic content, not style.`,
-        },
-        {
-          role: "user",
-          content: `Generate a semantic embedding for: "${text.slice(0, 2000)}"`,
-        },
-      ],
-      tools: [
-        {
-          type: "function",
-          function: {
-            name: "store_embedding",
-            description: "Store the generated embedding vector",
-            parameters: {
-              type: "object",
-              properties: {
-                vector: {
-                  type: "array",
-                  items: { type: "number" },
-                  description: "768-dimensional unit-normalized embedding vector",
-                },
-              },
-              required: ["vector"],
-              additionalProperties: false,
-            },
-          },
-        },
-      ],
-      tool_choice: { type: "function", function: { name: "store_embedding" } },
-    }),
-  });
+    task_type: taskType,
+    output_dimensionality: EMBEDDING_DIMENSIONS,
+  };
 
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`AI gateway error [${response.status}]: ${errText}`);
+  let lastError: Error | null = null;
+
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+      if (response.status === 429) {
+        // Rate limited — exponential backoff
+        const waitMs = Math.min(1000 * 2 ** attempt, 8000);
+        console.warn(`Embedding API rate limited, retrying in ${waitMs}ms (attempt ${attempt + 1}/${MAX_RETRIES})`);
+        await new Promise((r) => setTimeout(r, waitMs));
+        continue;
+      }
+
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`Embedding API error [${response.status}]: ${errText}`);
+      }
+
+      const data = await response.json();
+
+      const values = data?.embedding?.values;
+      if (!Array.isArray(values) || values.length === 0) {
+        throw new Error("Embedding API returned no values");
+      }
+
+      // gemini-embedding-001 with output_dimensionality=768 returns exactly 768 dims
+      // No padding/truncation needed — the model handles it natively via MRL
+      return values as number[];
+    } catch (e) {
+      lastError = e instanceof Error ? e : new Error(String(e));
+      if (attempt < MAX_RETRIES - 1) {
+        const waitMs = Math.min(500 * 2 ** attempt, 4000);
+        await new Promise((r) => setTimeout(r, waitMs));
+      }
+    }
   }
 
-  const data = await response.json();
-  const toolCall = data.choices?.[0]?.message?.tool_calls?.[0];
-  if (!toolCall) {
-    throw new Error("No tool call in AI response");
-  }
-
-  const args = JSON.parse(toolCall.function.arguments);
-  let vector: number[] = args.vector;
-
-  // Validate and normalize
-  if (!Array.isArray(vector) || vector.length === 0) {
-    throw new Error("Invalid vector from AI");
-  }
-
-  // Pad or truncate to 768
-  if (vector.length < 768) {
-    vector = [...vector, ...new Array(768 - vector.length).fill(0)];
-  } else if (vector.length > 768) {
-    vector = vector.slice(0, 768);
-  }
-
-  // L2 normalize
-  const norm = Math.sqrt(vector.reduce((s, v) => s + v * v, 0));
-  if (norm > 0) {
-    vector = vector.map((v) => v / norm);
-  }
-
-  return vector;
+  throw lastError || new Error("Embedding generation failed after retries");
 }
+
+/**
+ * Batch embed multiple texts. Processes sequentially to respect rate limits.
+ */
+async function generateEmbeddings(
+  texts: string[],
+  apiKey: string,
+  taskType: TaskType = "RETRIEVAL_DOCUMENT"
+): Promise<number[][]> {
+  const embeddings: number[][] = [];
+  for (const text of texts) {
+    const embedding = await generateEmbedding(text, apiKey, taskType);
+    embeddings.push(embedding);
+  }
+  return embeddings;
+}
+
+// ─── HTTP Handler ───────────────────────────────────────────────────
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -99,31 +127,32 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) {
-      return new Response(JSON.stringify({ error: "LOVABLE_API_KEY not configured" }), {
+    const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
+    if (!GEMINI_API_KEY) {
+      return new Response(JSON.stringify({ error: "GEMINI_API_KEY not configured" }), {
         status: 500,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
     const body = await req.json();
+    const taskType: TaskType = body.task_type || "RETRIEVAL_QUERY";
 
     // Single text
     if (body.text && typeof body.text === "string") {
-      const embedding = await generateEmbedding(body.text, LOVABLE_API_KEY);
+      const embedding = await generateEmbedding(body.text, GEMINI_API_KEY, taskType);
       return new Response(JSON.stringify({ embedding }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    // Multiple texts
+    // Multiple texts (max 20 to prevent abuse)
     if (body.texts && Array.isArray(body.texts)) {
-      const embeddings: number[][] = [];
-      for (const text of body.texts.slice(0, 20)) {
-        const embedding = await generateEmbedding(text, LOVABLE_API_KEY);
-        embeddings.push(embedding);
-      }
+      const embeddings = await generateEmbeddings(
+        body.texts.slice(0, 20),
+        GEMINI_API_KEY,
+        taskType
+      );
       return new Response(JSON.stringify({ embeddings }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -135,10 +164,10 @@ Deno.serve(async (req) => {
     });
   } catch (error) {
     console.error("generate-embedding error:", error);
-    const status = (error as any)?.message?.includes("429") ? 429 :
-                   (error as any)?.message?.includes("402") ? 402 : 500;
+    const msg = error instanceof Error ? error.message : "Internal error";
+    const status = msg.includes("429") ? 429 : msg.includes("402") ? 402 : 500;
     return new Response(
-      JSON.stringify({ error: error instanceof Error ? error.message : "Internal error" }),
+      JSON.stringify({ error: msg }),
       { status, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }

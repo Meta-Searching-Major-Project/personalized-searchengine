@@ -12,33 +12,148 @@ const corsHeaders = {
  *
  * Then generates an embedding for the document via the generate-embedding function
  * and stores it alongside the learned_score in feedback_learning_index.
+ *
+ * Text-chunking strategy:
+ *   - Short text (≤ 2000 chars): embed directly
+ *   - Long text (> 2000 chars): split into overlapping chunks (~1500 chars,
+ *     200-char overlap), embed each, average the vectors, and L2-normalize
  */
+
+// ─── Text Chunking ─────────────────────────────────────────────────
+
+const CHUNK_SIZE = 1500;
+const CHUNK_OVERLAP = 200;
+const DIRECT_EMBED_LIMIT = 2000;
+
+/**
+ * Splits text into overlapping chunks for embedding.
+ * Tries to break at sentence boundaries when possible.
+ */
+function chunkText(text: string): string[] {
+  if (text.length <= DIRECT_EMBED_LIMIT) {
+    return [text];
+  }
+
+  const chunks: string[] = [];
+  let start = 0;
+
+  while (start < text.length) {
+    let end = Math.min(start + CHUNK_SIZE, text.length);
+
+    // Try to break at a sentence boundary (., !, ?, newline)
+    if (end < text.length) {
+      const slice = text.slice(start, end);
+      const lastBreak = Math.max(
+        slice.lastIndexOf(". "),
+        slice.lastIndexOf("! "),
+        slice.lastIndexOf("? "),
+        slice.lastIndexOf("\n")
+      );
+      if (lastBreak > CHUNK_SIZE * 0.3) {
+        end = start + lastBreak + 1;
+      }
+    }
+
+    chunks.push(text.slice(start, end).trim());
+
+    // Advance by chunk size minus overlap
+    start = end - CHUNK_OVERLAP;
+    if (start < 0) start = 0;
+    // Prevent infinite loop for very short remaining text
+    if (end >= text.length) break;
+  }
+
+  return chunks.filter((c) => c.length > 0);
+}
+
+/**
+ * Averages multiple embedding vectors and L2-normalizes the result.
+ */
+function averageEmbeddings(embeddings: number[][]): number[] {
+  if (embeddings.length === 0) return [];
+  if (embeddings.length === 1) return embeddings[0];
+
+  const dim = embeddings[0].length;
+  const avg = new Array(dim).fill(0);
+
+  for (const emb of embeddings) {
+    for (let i = 0; i < dim; i++) {
+      avg[i] += emb[i];
+    }
+  }
+
+  // Average
+  for (let i = 0; i < dim; i++) {
+    avg[i] /= embeddings.length;
+  }
+
+  // L2 normalize
+  const norm = Math.sqrt(avg.reduce((s, v) => s + v * v, 0));
+  if (norm > 0) {
+    for (let i = 0; i < dim; i++) {
+      avg[i] /= norm;
+    }
+  }
+
+  return avg;
+}
+
+// ─── Embedding via generate-embedding function ──────────────────────
 
 async function generateEmbeddingViaFunction(
   supabaseUrl: string,
   serviceKey: string,
-  text: string
+  text: string,
+  taskType: string = "RETRIEVAL_DOCUMENT"
 ): Promise<number[] | null> {
   try {
+    const chunks = chunkText(text);
+
+    if (chunks.length === 1) {
+      // Single chunk — embed directly
+      const resp = await fetch(`${supabaseUrl}/functions/v1/generate-embedding`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${serviceKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ text: chunks[0], task_type: taskType }),
+      });
+      if (!resp.ok) {
+        console.error("Embedding generation failed:", resp.status, await resp.text());
+        return null;
+      }
+      const data = await resp.json();
+      return data.embedding || null;
+    }
+
+    // Multiple chunks — embed each, then average
     const resp = await fetch(`${supabaseUrl}/functions/v1/generate-embedding`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${serviceKey}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ texts: chunks, task_type: taskType }),
     });
     if (!resp.ok) {
-      console.error("Embedding generation failed:", resp.status, await resp.text());
+      console.error("Batch embedding generation failed:", resp.status, await resp.text());
       return null;
     }
     const data = await resp.json();
-    return data.embedding || null;
+    const embeddings: number[][] = data.embeddings;
+    if (!Array.isArray(embeddings) || embeddings.length === 0) {
+      return null;
+    }
+
+    return averageEmbeddings(embeddings);
   } catch (e) {
     console.error("Embedding call error:", e);
     return null;
   }
 }
+
+// ─── Main Handler ───────────────────────────────────────────────────
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -175,9 +290,15 @@ Deno.serve(async (req) => {
 
       if (importance <= 0) continue;
 
-      // Generate embedding for the document content
+      // Generate embedding for the document content (with chunking)
+      // Combine title + snippet for richer semantic representation
       const docText = `${doc.title} ${doc.snippet || ""}`.trim();
-      const embedding = await generateEmbeddingViaFunction(supabaseUrl, serviceKey, docText);
+      const embedding = await generateEmbeddingViaFunction(
+        supabaseUrl,
+        serviceKey,
+        docText,
+        "RETRIEVAL_DOCUMENT"
+      );
 
       // Upsert into feedback_learning_index
       const { data: existing } = await supabase

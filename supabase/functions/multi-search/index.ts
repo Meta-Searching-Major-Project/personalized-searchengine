@@ -6,6 +6,8 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
+// ─── Types ──────────────────────────────────────────────────────────
+
 interface SerpResult {
   position: number;
   title: string;
@@ -36,8 +38,87 @@ interface MergedDoc {
   engines: { engine: string; rank: number }[];
 }
 
-// ─── General web engines fanned out per search ──────────────────────
-const WEB_ENGINES = ["google", "bing", "duckduckgo", "yahoo", "yandex", "baidu"];
+// ─── Engine Configuration (Task 3) ─────────────────────────────────
+// Per-engine metadata for SerpApi: query param names, extra params,
+// which JSON key holds organic results, and optional custom parsers.
+
+interface EngineConfig {
+  engine: string;
+  queryParam?: string;                        // default "q"
+  extraParams?: Record<string, string>;       // appended to SerpApi URL
+  resultsKey?: string;                        // default "organic_results"
+  parseResult?: (r: any, i: number) => SerpResult | null;
+}
+
+/** Standard parser — works for Google, Bing, DuckDuckGo, Yandex, Baidu, Naver */
+function parseStandard(r: any, i: number): SerpResult | null {
+  const link = r.link || r.url || "";
+  if (!link) return null;
+  return {
+    position: r.position ?? i + 1,
+    title: r.title ?? "",
+    link,
+    snippet: r.snippet ?? r.description ?? "",
+  };
+}
+
+/** Brave — results live under data.web.results with { title, url, description } */
+function parseBrave(r: any, i: number): SerpResult | null {
+  const link = r.url || r.link || "";
+  if (!link) return null;
+  return {
+    position: r.position ?? i + 1,
+    title: r.title ?? "",
+    link,
+    snippet: r.description ?? r.snippet ?? "",
+  };
+}
+
+/** Google Scholar — append publication_info to snippet */
+function parseScholar(r: any, i: number): SerpResult | null {
+  const link = r.link || "";
+  if (!link) return null;
+  let snippet = r.snippet ?? "";
+  if (r.publication_info?.summary) {
+    snippet = `${r.publication_info.summary} — ${snippet}`;
+  }
+  return {
+    position: r.position ?? i + 1,
+    title: r.title ?? "",
+    link,
+    snippet,
+  };
+}
+
+/** Google News — results use news_results with { title, link, snippet, source, date } */
+function parseNews(r: any, i: number): SerpResult | null {
+  const link = r.link || "";
+  if (!link) return null;
+  let snippet = r.snippet ?? "";
+  if (r.source?.name) snippet = `[${r.source.name}] ${snippet}`;
+  if (r.date) snippet = `${snippet} (${r.date})`;
+  return {
+    position: r.position ?? i + 1,
+    title: r.title ?? "",
+    link,
+    snippet: snippet.trim(),
+  };
+}
+
+const WEB_ENGINES: EngineConfig[] = [
+  // ── Original 6 engines ──
+  { engine: "google" },
+  { engine: "bing" },
+  { engine: "duckduckgo" },
+  { engine: "yahoo", queryParam: "p" },
+  { engine: "yandex", queryParam: "text" },
+  { engine: "baidu" },
+  // ── New engines (Task 3) ──
+  { engine: "naver", extraParams: { where: "web" } },
+  { engine: "brave", resultsKey: "web.results", parseResult: parseBrave },
+  { engine: "google_scholar", parseResult: parseScholar },
+  { engine: "google_news", resultsKey: "news_results", parseResult: parseNews },
+];
 
 // Cache freshness window — 7 days
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -72,14 +153,23 @@ function extractRichBlocks(data: any): RichBlocks {
   return rich;
 }
 
+/**
+ * Resolves a nested key like "web.results" from an object.
+ * e.g. getNestedKey(data, "web.results") → data.web?.results
+ */
+function getNestedKey(obj: any, key: string): any {
+  return key.split(".").reduce((acc, part) => acc?.[part], obj);
+}
+
 // ─── Search Engine Query (with cache) ───────────────────────────────
 
 async function searchEngine(
   query: string,
-  engine: string,
+  config: EngineConfig,
   apiKey: string,
   serviceClient: any
 ): Promise<EngineResult> {
+  const { engine } = config;
   const qNorm = normalizeQuery(query);
 
   // 1. Try cache
@@ -108,11 +198,13 @@ async function searchEngine(
 
   // 2. Fetch from SerpAPI
   try {
+    const qp = config.queryParam || "q";
     const params = new URLSearchParams({
-      q: query,
+      [qp]: query,
       api_key: apiKey,
       engine,
       num: "10",
+      ...(config.extraParams || {}),
     });
 
     const response = await fetch(
@@ -126,14 +218,20 @@ async function searchEngine(
     }
 
     const data = await response.json();
-    const organicResults: SerpResult[] = (data.organic_results || []).map(
-      (r: any, i: number) => ({
-        position: r.position ?? i + 1,
-        title: r.title ?? "",
-        link: r.link ?? "",
-        snippet: r.snippet ?? "",
-      })
-    );
+
+    // Resolve the results array using the configured key
+    const resultsKey = config.resultsKey || "organic_results";
+    const rawResults = getNestedKey(data, resultsKey) || [];
+    const parser = config.parseResult || parseStandard;
+
+    const organicResults: SerpResult[] = [];
+    if (Array.isArray(rawResults)) {
+      for (let i = 0; i < rawResults.length; i++) {
+        const parsed = parser(rawResults[i], i);
+        if (parsed) organicResults.push(parsed);
+      }
+    }
+
     const rich = extractRichBlocks(data);
 
     // 3. Upsert cache (fire-and-forget)
@@ -188,26 +286,55 @@ function deduplicateResults(engineResults: EngineResult[]): MergedDoc[] {
   return Array.from(urlMap.values());
 }
 
-// ─── Rank Aggregation Algorithms ────────────────────────────────────
+// ─── Rank Aggregation Algorithms (Task 1 — fixed) ──────────────────
+// All algorithms now use a dynamic maxRank instead of hardcoded N=10.
+// Deterministic tiebreaker: more engines first, then URL alphabetically.
 
-const N = 10; // max results per engine
+function computeMaxRank(docs: MergedDoc[]): number {
+  let max = 10; // floor
+  for (const d of docs) {
+    for (const e of d.engines) {
+      if (e.rank > max) max = e.rank;
+    }
+  }
+  return max;
+}
 
-function getRank(doc: MergedDoc, engine: string): number {
+/** Sentinel rank for documents absent from an engine */
+function getSentinel(maxRank: number): number {
+  return maxRank + 1;
+}
+
+function getRank(doc: MergedDoc, engine: string, maxRank: number): number {
   const entry = doc.engines.find((e) => e.engine === engine);
-  return entry ? entry.rank : N + 1;
+  return entry ? entry.rank : getSentinel(maxRank);
 }
 
-function bordaScore(doc: MergedDoc): number {
-  return doc.engines.reduce((sum, e) => sum + (N + 1 - e.rank), 0);
+/** Deterministic tiebreaker: prefer more engines, then alphabetical URL */
+function tiebreak(a: MergedDoc, b: MergedDoc): number {
+  if (b.engines.length !== a.engines.length) return b.engines.length - a.engines.length;
+  return a.url.localeCompare(b.url);
 }
 
-function aggregateBorda(docs: MergedDoc[]): MergedDoc[] {
-  return [...docs].sort((a, b) => bordaScore(b) - bordaScore(a));
+// ── Borda Count ─────────────────────────────────────────────────────
+
+function bordaScore(doc: MergedDoc, maxRank: number): number {
+  // Only count engines the doc appears in (no sentinel penalty)
+  return doc.engines.reduce((sum, e) => sum + (maxRank + 1 - e.rank), 0);
 }
 
-function aggregateShimura(docs: MergedDoc[], engines: string[]): MergedDoc[] {
+function aggregateBorda(docs: MergedDoc[], maxRank: number): MergedDoc[] {
+  return [...docs].sort((a, b) => {
+    const diff = bordaScore(b, maxRank) - bordaScore(a, maxRank);
+    return diff !== 0 ? diff : tiebreak(a, b);
+  });
+}
+
+// ── Shimura (Fuzzy Majority) ────────────────────────────────────────
+
+function aggregateShimura(docs: MergedDoc[], engines: string[], maxRank: number): MergedDoc[] {
   const m = engines.length;
-  if (m === 0) return aggregateBorda(docs);
+  if (m === 0) return aggregateBorda(docs, maxRank);
   const scores = docs.map((a, i) => {
     let minPref = Infinity;
     for (let j = 0; j < docs.length; j++) {
@@ -215,24 +342,32 @@ function aggregateShimura(docs: MergedDoc[], engines: string[]): MergedDoc[] {
       const b = docs[j];
       let count = 0;
       for (const eng of engines) {
-        if (getRank(a, eng) <= getRank(b, eng)) count++;
+        if (getRank(a, eng, maxRank) <= getRank(b, eng, maxRank)) count++;
       }
       const pref = count / m;
       if (pref < minPref) minPref = pref;
     }
     return { doc: a, score: minPref === Infinity ? 1 : minPref };
   });
-  scores.sort((a, b) => b.score - a.score);
+  scores.sort((a, b) => {
+    const diff = b.score - a.score;
+    return diff !== 0 ? diff : tiebreak(a.doc, b.doc);
+  });
   return scores.map((s) => s.doc);
 }
 
-function aggregateModal(docs: MergedDoc[], engines: string[]): MergedDoc[] {
+// ── Modal Rank (FIXED: only count actual ranks, not sentinels) ──────
+
+function aggregateModal(docs: MergedDoc[]): MergedDoc[] {
   function modalRank(doc: MergedDoc): number {
-    const ranks = engines.map((eng) => getRank(doc, eng));
+    // Only use ranks from engines that actually returned this doc
+    if (doc.engines.length === 0) return Infinity;
     const freq = new Map<number, number>();
-    for (const r of ranks) freq.set(r, (freq.get(r) || 0) + 1);
+    for (const e of doc.engines) {
+      freq.set(e.rank, (freq.get(e.rank) || 0) + 1);
+    }
     let maxFreq = 0;
-    let bestRank = N + 1;
+    let bestRank = Infinity;
     for (const [rank, count] of freq) {
       if (count > maxFreq || (count === maxFreq && rank < bestRank)) {
         maxFreq = count;
@@ -241,37 +376,53 @@ function aggregateModal(docs: MergedDoc[], engines: string[]): MergedDoc[] {
     }
     return bestRank;
   }
-  return [...docs].sort((a, b) => modalRank(a) - modalRank(b));
+  return [...docs].sort((a, b) => {
+    const diff = modalRank(a) - modalRank(b);
+    return diff !== 0 ? diff : tiebreak(a, b);
+  });
 }
 
-function aggregateMFO(docs: MergedDoc[], engines: string[]): MergedDoc[] {
+// ── MFO (Maximum Fuzzy Optimistic) ──────────────────────────────────
+
+function aggregateMFO(docs: MergedDoc[], maxRank: number): MergedDoc[] {
   function mfoScore(doc: MergedDoc): number {
-    let maxMu = 0;
-    for (const eng of engines) {
-      const r = getRank(doc, eng);
-      const mu = (N + 1 - r) / N;
-      if (mu > maxMu) maxMu = mu;
+    let best = 0;
+    for (const e of doc.engines) {
+      const mu = (maxRank + 1 - e.rank) / maxRank;
+      if (mu > best) best = mu;
     }
-    return maxMu;
+    return best;
   }
-  return [...docs].sort((a, b) => mfoScore(b) - mfoScore(a));
+  return [...docs].sort((a, b) => {
+    const diff = mfoScore(b) - mfoScore(a);
+    return diff !== 0 ? diff : tiebreak(a, b);
+  });
 }
 
-function aggregateMBV(docs: MergedDoc[], engines: string[]): MergedDoc[] {
+// ── MBV (FIXED: compute over actual ranks only, positive scoring) ───
+
+function aggregateMBV(docs: MergedDoc[], maxRank: number): MergedDoc[] {
   const k = 0.5;
   function mbvScore(doc: MergedDoc): number {
-    const ranks = engines.map((eng) => getRank(doc, eng));
+    if (doc.engines.length === 0) return 0;
+    const ranks = doc.engines.map((e) => e.rank);
     const mean = ranks.reduce((s, r) => s + r, 0) / ranks.length;
-    const variance =
-      ranks.reduce((s, r) => s + (r - mean) ** 2, 0) / ranks.length;
-    return -(mean - k * Math.sqrt(variance));
+    const variance = ranks.reduce((s, r) => s + (r - mean) ** 2, 0) / ranks.length;
+    // Positive scoring: lower mean = better, lower variance = more consistent
+    // k * σ rewards consistency (subtracts less for low-variance docs)
+    return (maxRank + 1 - mean) + k * Math.sqrt(variance > 0 ? 1 / variance : 1);
   }
-  return [...docs].sort((a, b) => mbvScore(b) - mbvScore(a));
+  return [...docs].sort((a, b) => {
+    const diff = mbvScore(b) - mbvScore(a);
+    return diff !== 0 ? diff : tiebreak(a, b);
+  });
 }
 
-function aggregateOWA(docs: MergedDoc[], engines: string[]): MergedDoc[] {
+// ── OWA (Ordered Weighted Averaging) ────────────────────────────────
+
+function aggregateOWA(docs: MergedDoc[], engines: string[], maxRank: number): MergedDoc[] {
   const m = engines.length;
-  if (m === 0) return aggregateBorda(docs);
+  if (m === 0) return aggregateBorda(docs, maxRank);
   const weights: number[] = [];
   for (let j = 1; j <= m; j++) {
     weights.push((2 * (m + 1 - j)) / (m * (m + 1)));
@@ -282,7 +433,7 @@ function aggregateOWA(docs: MergedDoc[], engines: string[]): MergedDoc[] {
       if (i === j) continue;
       const b = docs[j];
       const prefs = engines.map((eng) =>
-        getRank(a, eng) <= getRank(b, eng) ? 1 : 0
+        getRank(a, eng, maxRank) <= getRank(b, eng, maxRank) ? 1 : 0
       );
       prefs.sort((x, y) => y - x);
       const owaVal = prefs.reduce((sum, p, idx) => sum + weights[idx] * p, 0);
@@ -290,22 +441,33 @@ function aggregateOWA(docs: MergedDoc[], engines: string[]): MergedDoc[] {
     }
     return { doc: a, score: minOWA === Infinity ? 1 : minOWA };
   });
-  scores.sort((a, b) => b.score - a.score);
+  scores.sort((a, b) => {
+    const diff = b.score - a.score;
+    return diff !== 0 ? diff : tiebreak(a.doc, b.doc);
+  });
   return scores.map((s) => s.doc);
 }
 
+// ── Biased (SQM-weighted Borda) ─────────────────────────────────────
+
 function aggregateBiased(
   docs: MergedDoc[],
-  sqmScores: Record<string, number>
+  sqmScores: Record<string, number>,
+  maxRank: number
 ): MergedDoc[] {
   function biasedScore(doc: MergedDoc): number {
     return doc.engines.reduce((sum, e) => {
       const sqm = sqmScores[e.engine] ?? 1.0;
-      return sum + sqm * (N + 1 - e.rank);
+      return sum + sqm * (maxRank + 1 - e.rank);
     }, 0);
   }
-  return [...docs].sort((a, b) => biasedScore(b) - biasedScore(a));
+  return [...docs].sort((a, b) => {
+    const diff = biasedScore(b) - biasedScore(a);
+    return diff !== 0 ? diff : tiebreak(a, b);
+  });
 }
+
+// ── Dispatcher ──────────────────────────────────────────────────────
 
 function rankResults(
   docs: MergedDoc[],
@@ -313,22 +475,23 @@ function rankResults(
   activeEngines: string[],
   sqmScores: Record<string, number>
 ): MergedDoc[] {
+  const maxRank = computeMaxRank(docs);
   switch (method) {
     case "shimura":
-      return aggregateShimura(docs, activeEngines);
+      return aggregateShimura(docs, activeEngines, maxRank);
     case "modal":
-      return aggregateModal(docs, activeEngines);
+      return aggregateModal(docs);
     case "mfo":
-      return aggregateMFO(docs, activeEngines);
+      return aggregateMFO(docs, maxRank);
     case "mbv":
-      return aggregateMBV(docs, activeEngines);
+      return aggregateMBV(docs, maxRank);
     case "owa":
-      return aggregateOWA(docs, activeEngines);
+      return aggregateOWA(docs, activeEngines, maxRank);
     case "biased":
-      return aggregateBiased(docs, sqmScores);
+      return aggregateBiased(docs, sqmScores, maxRank);
     case "borda":
     default:
-      return aggregateBorda(docs);
+      return aggregateBorda(docs, maxRank);
   }
 }
 
@@ -405,7 +568,7 @@ Deno.serve(async (req) => {
 
     // Query all general engines in parallel (cache-first per engine)
     const engineResults: EngineResult[] = await Promise.all(
-      WEB_ENGINES.map((eng) => searchEngine(trimmedQuery, eng, apiKey, serviceClient))
+      WEB_ENGINES.map((cfg) => searchEngine(trimmedQuery, cfg, apiKey, serviceClient))
     );
 
     // Merge rich blocks from all engines
@@ -425,7 +588,7 @@ Deno.serve(async (req) => {
                 Authorization: `Bearer ${serviceKey}`,
                 "Content-Type": "application/json",
               },
-              body: JSON.stringify({ text: trimmedQuery }),
+              body: JSON.stringify({ text: trimmedQuery, task_type: "RETRIEVAL_QUERY" }),
             });
             if (resp.ok) {
               const data = await resp.json();
@@ -508,6 +671,41 @@ Deno.serve(async (req) => {
 
     if (learningResults.results.length > 0) engineResults.push(learningResults);
 
+    // ─── Local web index as additional engine source ──────────────
+    let localIndexResults: EngineResult = { engine: "local_index", results: [] };
+    try {
+      const { count: indexedCount } = await serviceClient
+        .from("web_pages")
+        .select("id", { count: "exact", head: true })
+        .eq("crawl_status", "crawled");
+
+      // Only query local index if we have a meaningful number of pages
+      if (indexedCount && indexedCount >= 100) {
+        const localResp = await fetch(`${supabaseUrl}/functions/v1/search-local-index`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${serviceKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ query: trimmedQuery, count: 10 }),
+        });
+        if (localResp.ok) {
+          const localData = await localResp.json();
+          if (localData.results && localData.results.length > 0) {
+            localIndexResults.results = localData.results.map((r: any, i: number) => ({
+              position: i + 1,
+              title: r.title || r.link,
+              link: r.link,
+              snippet: r.snippet || "",
+            }));
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("Local index search failed (non-fatal):", e);
+    }
+    if (localIndexResults.results.length > 0) engineResults.push(localIndexResults);
+
     // Always re-aggregate (even on cached engine results)
     const deduplicated = deduplicateResults(engineResults);
     const activeEngines = engineResults
@@ -515,22 +713,101 @@ Deno.serve(async (req) => {
       .map((er) => er.engine);
     const merged = rankResults(deduplicated, method, activeEngines, sqmScores);
 
-    return new Response(
-      JSON.stringify({
-        success: true,
-        query: trimmedQuery,
-        aggregation_method: method,
-        merged,
-        richBlocks,
-        engineResults: engineResults.map((er) => ({
-          engine: er.engine,
-          count: er.results.length,
-          error: er.error,
-          cached: er.cached,
-        })),
-      }),
-      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    const responseBody = JSON.stringify({
+      success: true,
+      query: trimmedQuery,
+      aggregation_method: method,
+      merged,
+      richBlocks,
+      engineResults: engineResults.map((er) => ({
+        engine: er.engine,
+        count: er.results.length,
+        error: er.error,
+        cached: er.cached,
+      })),
+    });
+
+    // ─── Fire-and-forget: queue URLs for crawling ─────────────────
+    // This runs AFTER the response is built so it doesn't slow down search.
+    // We insert all unique result URLs into the crawl_queue table.
+    (async () => {
+      try {
+        // Collect unique URLs with metadata
+        const urlMap = new Map<string, { url: string; title: string; snippet: string; engines: string[]; priority: number }>();
+        for (const er of engineResults) {
+          if (er.engine === "learned" || er.engine === "local_index") continue;
+          for (const r of er.results) {
+            if (!r.link) continue;
+            const key = r.link.replace(/\/+$/, "").toLowerCase();
+            const existing = urlMap.get(key);
+            if (existing) {
+              existing.engines.push(er.engine);
+              existing.priority = existing.engines.length;
+            } else {
+              urlMap.set(key, {
+                url: r.link,
+                title: r.title || "",
+                snippet: r.snippet || "",
+                engines: [er.engine],
+                priority: 1,
+              });
+            }
+          }
+        }
+
+        // Check which URLs are already in web_pages (crawled recently)
+        const urls = Array.from(urlMap.values()).map((u) => u.url);
+        if (urls.length === 0) return;
+
+        const { data: existingPages } = await serviceClient
+          .from("web_pages")
+          .select("url")
+          .in("url", urls.slice(0, 200));
+
+        const existingUrls = new Set((existingPages || []).map((p: any) => p.url));
+
+        // Also check what's already queued
+        const { data: existingQueue } = await serviceClient
+          .from("crawl_queue")
+          .select("url")
+          .in("url", urls.slice(0, 200))
+          .in("status", ["pending", "processing"]);
+
+        const queuedUrls = new Set((existingQueue || []).map((q: any) => q.url));
+
+        // Insert only new URLs
+        const toInsert = Array.from(urlMap.values())
+          .filter((u) => !existingUrls.has(u.url) && !queuedUrls.has(u.url))
+          .map((u) => ({
+            url: u.url,
+            title: u.title,
+            snippet: u.snippet,
+            source_engine: u.engines[0],
+            priority: u.priority,
+          }));
+
+        if (toInsert.length > 0) {
+          await serviceClient.from("crawl_queue").insert(toInsert);
+          console.log(`Queued ${toInsert.length} URLs for crawling`);
+        }
+
+        // Trigger crawl-page in background (fire-and-forget)
+        fetch(`${supabaseUrl}/functions/v1/crawl-page`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${serviceKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ batch_size: 5 }),
+        }).catch((e) => console.warn("Background crawl trigger failed:", e));
+      } catch (e) {
+        console.warn("URL queueing failed (non-fatal):", e);
+      }
+    })();
+
+    return new Response(responseBody, {
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
   } catch (error) {
     console.error("Multi-search error:", error);
     const msg = error instanceof Error ? error.message : "Search failed";
