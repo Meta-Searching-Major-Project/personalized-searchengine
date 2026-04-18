@@ -9,6 +9,8 @@ import { Button } from "@/components/ui/button";
 import { BarChart3, History, BookmarkIcon, Search, TrendingUp, Users, ExternalLink } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, Legend } from "recharts";
 import { useNavigate } from "react-router-dom";
+import { updateLearningIndex, computeSQM } from "@/lib/api/learningIndex";
+import { useToast } from "@/hooks/use-toast";
 
 interface SearchHistoryItem {
   id: string;
@@ -49,6 +51,8 @@ const AnalyticsPage = () => {
   const [learnedDocs, setLearnedDocs] = useState<LearnedDoc[]>([]);
   const [savedDocs, setSavedDocs] = useState<SavedDoc[]>([]);
   const [loading, setLoading] = useState(true);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const { toast } = useToast();
 
   // Admin state
   const [adminSqm, setAdminSqm] = useState<{ engine: string; avg_score: number; total_queries: number; user_count: number }[]>([]);
@@ -180,6 +184,44 @@ const AnalyticsPage = () => {
     navigate("/", { state: { rerunQuery: query } });
   };
 
+  const handleManualProcess = async () => {
+    if (!searchHistory.length) {
+      toast({ description: "No search history found to process." });
+      return;
+    }
+    
+    setIsProcessing(true);
+    try {
+      // Get the latest search history ID
+      const latestId = searchHistory[0].id;
+      
+      // Flush extension
+      window.postMessage({ type: "PERSONASEARCH_FLUSH_DWELL" }, "*");
+      await new Promise(resolve => setTimeout(resolve, 300));
+      
+      await Promise.all([
+        updateLearningIndex(latestId),
+        computeSQM(latestId)
+      ]);
+      
+      toast({ 
+        title: "Processing Complete", 
+        description: "Successfully processed feedback for the latest search session. Please refresh the page.",
+      });
+      
+      // Reload page to fetch new analytics
+      setTimeout(() => window.location.reload(), 1500);
+    } catch (e: any) {
+      toast({ 
+        title: "Processing Error", 
+        description: e.message || "An error occurred",
+        variant: "destructive"
+      });
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-background">
@@ -204,7 +246,16 @@ const AnalyticsPage = () => {
     <div className="min-h-screen bg-background">
       <AppHeader />
       <main className="mx-auto max-w-5xl p-4 space-y-6">
-        <h1 className="text-2xl font-bold text-foreground">Analytics</h1>
+        <div className="flex justify-between items-center">
+          <h1 className="text-2xl font-bold text-foreground">Analytics</h1>
+          <Button 
+            onClick={handleManualProcess} 
+            disabled={isProcessing}
+            variant="outline"
+          >
+            {isProcessing ? "Processing..." : "Force Process Feedback (Debug)"}
+          </Button>
+        </div>
 
         <Tabs defaultValue="overview">
           <TabsList>

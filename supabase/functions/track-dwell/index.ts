@@ -32,13 +32,14 @@ Deno.serve(async (req) => {
     const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
     const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
-    // Verify the user's token
-    const authClient = createClient(supabaseUrl, anonKey);
-    const token = authHeader.replace("Bearer ", "");
+    // Verify the user's token by attaching the Auth header
+    const authClient = createClient(supabaseUrl, anonKey, {
+      global: { headers: { Authorization: authHeader } }
+    });
     const {
       data: { user },
       error: authError,
-    } = await authClient.auth.getUser(token);
+    } = await authClient.auth.getUser();
 
     if (authError || !user) {
       return new Response(JSON.stringify({ error: "Unauthorized" }), {
