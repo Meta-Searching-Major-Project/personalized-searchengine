@@ -622,18 +622,26 @@ Deno.serve(async (req) => {
           );
 
           if (!matchError && matchedDocs && matchedDocs.length > 0) {
-            const maxLearnedScore = Math.max(...matchedDocs.map((d: any) => d.learned_score), 0.01);
-            const scored = matchedDocs.map((d: any) => ({
-              ...d,
-              blended: d.similarity * 0.6 + (d.learned_score / maxLearnedScore) * 0.4,
-            }));
-            scored.sort((a: any, b: any) => b.blended - a.blended);
-            learningResults.results = scored.map((doc: any, i: number) => ({
-              position: i + 1,
-              title: doc.title || doc.url,
-              link: doc.url,
-              snippet: doc.snippet || "",
-            }));
+            // N+1 Engine: Filter documents that have a meaningful learned relevance
+            const thresholdDocs = matchedDocs.filter((d: any) => d.learned_score >= 0.05);
+
+            if (thresholdDocs.length > 0) {
+              const maxLearnedScore = Math.max(...thresholdDocs.map((d: any) => d.learned_score), 0.01);
+              const scored = thresholdDocs.map((d: any) => ({
+                ...d,
+                // Blend the semantic similarity with the explicit learned_score
+                blended: d.similarity * 0.6 + (d.learned_score / maxLearnedScore) * 0.4,
+              }));
+              
+              scored.sort((a: any, b: any) => b.blended - a.blended);
+              
+              learningResults.results = scored.map((doc: any, i: number) => ({
+                position: i + 1,
+                title: doc.title || doc.url,
+                link: doc.url,
+                snippet: doc.snippet || "",
+              }));
+            }
           }
         } else {
           const { data: learnedRes } = await serviceClient

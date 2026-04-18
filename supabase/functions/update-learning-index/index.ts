@@ -242,10 +242,11 @@ Deno.serve(async (req) => {
     const fbMap = new Map(feedbackRows.map((f) => [f.search_result_id, f]));
     const queryText = historyRes.data?.query || "";
 
-    // Compute normalization bounds
-    const maxClickOrder = Math.max(...feedbackRows.map((f) => f.click_order ?? 0), 1);
-    const maxDwell = Math.max(...feedbackRows.map((f) => f.dwell_time_ms ?? 0), 1);
-    const maxCopy = Math.max(...feedbackRows.map((f) => f.copy_paste_chars ?? 0), 1);
+    // Calculate c_j_total (sum of copy-paste chars across ALL feedback in this session)
+    const cTotal = feedbackRows.reduce((sum, f) => sum + (f.copy_paste_chars ?? 0), 0);
+
+    // Track URLs that were interacted with so we can penalize the rest
+    const interactedUrls = new Set<string>();
 
     // Deduplicate by URL
     const urlResultMap = new Map<string, { url: string; title: string; snippet: string | null; resultIds: string[] }>();
@@ -271,16 +272,28 @@ Deno.serve(async (req) => {
       }
       if (!bestFb) continue;
 
-      const V = bestFb.click_order ? 1 - (bestFb.click_order - 1) / maxClickOrder : 0;
-      const T = (bestFb.dwell_time_ms ?? 0) / maxDwell;
+      interactedUrls.add(doc.url);
+
+      // V = 1 / 2^(v_j - 1)
+      const V = bestFb.click_order ? 1 / Math.pow(2, bestFb.click_order - 1) : 0;
+
+      // T = t_j / t_j_max
+      const pageSizeBytes = (bestFb as any).page_size_bytes ?? 0;
+      const readingSpeed = profile.reading_speed || 10;
+      const tMax = pageSizeBytes > 0 ? (pageSizeBytes / readingSpeed) * 1000 : 0;
+      const T = tMax > 0 ? Math.min((bestFb.dwell_time_ms ?? 0) / tMax, 1.0) : 0;
+
       const P = bestFb.printed ? 1 : 0;
       const S = bestFb.saved ? 1 : 0;
       const B = bestFb.bookmarked ? 1 : 0;
       const E = bestFb.emailed ? 1 : 0;
-      const C = (bestFb.copy_paste_chars ?? 0) / maxCopy;
 
+      // C = c_j / c_j_total
+      const C = cTotal > 0 ? (bestFb.copy_paste_chars ?? 0) / cTotal : 0;
+
+      // wV must be 1
       const importance =
-        profile.weight_v * V +
+        1.0 * V +
         profile.weight_t * T +
         profile.weight_p * P +
         profile.weight_s * S +
@@ -321,8 +334,14 @@ Deno.serve(async (req) => {
       }
 
       if (existing) {
-        const alpha = 0.3;
-        updatePayload.learned_score = alpha * importance + (1 - alpha) * existing.learned_score;
+        // Exact formula: New = (Old + (µ * sigma)) / (1 + (µ * sigma))
+        const mu = 0.1; // learning rate
+        const updateTerm = mu * importance;
+        updatePayload.learned_score = (existing.learned_score + updateTerm) / (1 + updateTerm);
+        
+        // Reset ignored_count since it was interacted with
+        updatePayload.ignored_count = 0;
+
         const queries: string[] = existing.query_matches || [];
         if (queryText && !queries.includes(queryText)) {
           queries.push(queryText);
@@ -334,14 +353,52 @@ Deno.serve(async (req) => {
           .update(updatePayload)
           .eq("id", existing.id);
       } else {
+        // Initial score for first-time interaction
+        const mu = 0.1;
+        updatePayload.learned_score = (0 + (mu * importance)) / (1 + (mu * importance));
+        
         await supabase.from("feedback_learning_index").insert({
           url: doc.url,
           user_id: user.id,
           query_matches: queryText ? [queryText] : [],
+          ignored_count: 0,
           ...updatePayload,
         });
       }
       updated++;
+    }
+
+    // ─── Penalization for Ignored Documents ─────────────────────────
+    // For all documents returned in the search but NOT interacted with,
+    // apply an exponential penalty to their learned_score.
+    for (const [, doc] of urlResultMap) {
+      if (interactedUrls.has(doc.url)) continue;
+
+      const { data: existing } = await supabase
+        .from("feedback_learning_index")
+        .select("id, learned_score, ignored_count")
+        .eq("url", doc.url)
+        .eq("user_id", user.id)
+        .maybeSingle();
+
+      if (existing && existing.learned_score > 0) {
+        const newIgnoredCount = (existing.ignored_count || 0) + 1;
+        // Exponential decay penalty (e.g., * 0.9^count)
+        const decayFactor = Math.pow(0.9, newIgnoredCount);
+        let newScore = existing.learned_score * decayFactor;
+        
+        // Bottom out at 0
+        if (newScore < 0.01) newScore = 0;
+
+        await supabase
+          .from("feedback_learning_index")
+          .update({
+            learned_score: newScore,
+            ignored_count: newIgnoredCount,
+            updated_at: new Date().toISOString()
+          })
+          .eq("id", existing.id);
+      }
     }
 
     return new Response(JSON.stringify({ success: true, updated }), {
