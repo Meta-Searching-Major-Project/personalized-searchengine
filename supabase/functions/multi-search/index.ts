@@ -320,7 +320,11 @@ function tiebreak(a: MergedDoc, b: MergedDoc): number {
 
 function bordaScore(doc: MergedDoc, maxRank: number): number {
   // Only count engines the doc appears in (no sentinel penalty)
-  return doc.engines.reduce((sum, e) => sum + (maxRank + 1 - e.rank), 0);
+  return doc.engines.reduce((sum, e) => {
+    // Massive boost for personalized learned results
+    const weight = e.engine === "learned" ? 5 : 1; 
+    return sum + (weight * (maxRank + 1 - e.rank));
+  }, 0);
 }
 
 function aggregateBorda(docs: MergedDoc[], maxRank: number): MergedDoc[] {
@@ -457,7 +461,8 @@ function aggregateBiased(
 ): MergedDoc[] {
   function biasedScore(doc: MergedDoc): number {
     return doc.engines.reduce((sum, e) => {
-      const sqm = sqmScores[e.engine] ?? 1.0;
+      // If it's the learned engine, give it a massive SQM score to ensure it bubbles up
+      const sqm = e.engine === "learned" ? 5.0 : (sqmScores[e.engine] ?? 1.0);
       return sum + sqm * (maxRank + 1 - e.rank);
     }, 0);
   }
