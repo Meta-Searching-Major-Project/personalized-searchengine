@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      width: 280px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #0f0f13;
+      color: #e4e4e7;
+      padding: 16px;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+    .header h1 {
+      font-size: 14px;
+      font-weight: 600;
+      background: linear-gradient(135deg, #818cf8, #a78bfa);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .logo {
+      width: 24px;
+      height: 24px;
+      background: linear-gradient(135deg, #818cf8, #a78bfa);
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      color: white;
+      font-weight: bold;
+    }
+    .status {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 10px 12px;
+      background: #1a1a24;
+      border-radius: 8px;
+      margin-bottom: 10px;
+      font-size: 12px;
+    }
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+    .dot.green { background: #22c55e; }
+    .dot.amber { background: #f59e0b; }
+    .dot.red { background: #ef4444; }
+    .stat {
+      display: flex;
+      justify-content: space-between;
+      padding: 8px 12px;
+      background: #1a1a24;
+      border-radius: 8px;
+      margin-bottom: 6px;
+      font-size: 12px;
+    }
+    .stat .label { color: #a1a1aa; }
+    .stat .value { font-weight: 600; color: #818cf8; }
+    .footer {
+      margin-top: 12px;
+      text-align: center;
+      font-size: 10px;
+      color: #52525b;
+    }
+    .footer a {
+      color: #818cf8;
+      text-decoration: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="logo">PS</div>
+    <h1>PersonaSearch Tracker</h1>
+  </div>
+
+  <div class="status" id="connectionStatus">
+    <div class="dot amber" id="statusDot"></div>
+    <span id="statusText">Checking...</span>
+  </div>
+
+  <div class="stat">
+    <span class="label">Tabs tracked</span>
+    <span class="value" id="trackedCount">0</span>
+  </div>
+
+  <div class="stat">
+    <span class="label">Signals collected</span>
+    <span class="value">T, C</span>
+  </div>
+
+  <div class="footer">
+    <a href="http://localhost:8080" target="_blank">Open PersonaSearch →</a>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

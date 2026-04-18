@@ -86,7 +86,7 @@ Deno.serve(async (req) => {
     const resultIds = searchResults.map((r) => r.id);
     const { data: feedbackRows } = await supabase
       .from("user_feedback")
-      .select("*")
+      .select("*, page_size_bytes")
       .in("search_result_id", resultIds)
       .eq("user_id", user.id);
 
@@ -98,11 +98,21 @@ Deno.serve(async (req) => {
 
     const fbMap = new Map(feedbackRows.map((f) => [f.search_result_id, f]));
 
-    // 4. Compute importance I(d) for each result that has feedback
-    // Normalization bounds
-    const maxClickOrder = Math.max(...feedbackRows.map((f) => f.click_order ?? 0), 1);
-    const maxDwell = Math.max(...feedbackRows.map((f) => f.dwell_time_ms ?? 0), 1);
-    const maxCopy = Math.max(...feedbackRows.map((f) => f.copy_paste_chars ?? 0), 1);
+    // 4. Compute importance σ(d) for each result that has feedback
+    // Per Beg & Ahmad (2007):
+    //   σ_j = wV * 1/2^(v_j-1) + wT * t_j/t_j_max + wP*p_j + wS*s_j + wB*b_j + wE*e_j + wC * c_j/c_j_total
+    //
+    // Key rules:
+    //   - V uses exponential decay: 1st click = 1, 2nd = 0.5, 3rd = 0.25, etc.
+    //   - T is normalized by t_j_max = page_size_bytes / reading_speed (10 bytes/sec)
+    //   - C is normalized by c_j_total (sum of all copy chars across all docs in session)
+    //   - wV MUST always be 1 (paper rule)
+
+    // Enforce wV = 1 per paper requirement
+    const wV = 1.0;
+
+    // Calculate c_j_total (sum of copy-paste chars across ALL feedback in this session)
+    const cTotal = feedbackRows.reduce((sum, f) => sum + (f.copy_paste_chars ?? 0), 0);
 
     // Group results by URL (dedupe across engines)
     const urlMap = new Map<string, { url: string; resultIds: string[]; engineRanks: Map<string, number> }>();
@@ -119,7 +129,7 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Compute I(d) per URL
+    // Compute σ(d) per URL
     const docImportance: { url: string; importance: number; engineRanks: Map<string, number> }[] = [];
 
     for (const [, doc] of urlMap) {
@@ -133,16 +143,28 @@ Deno.serve(async (req) => {
       }
       if (!bestFb) continue;
 
-      const V = bestFb.click_order ? 1 - (bestFb.click_order - 1) / maxClickOrder : 0;
-      const T = (bestFb.dwell_time_ms ?? 0) / maxDwell;
+      // V = 1 / 2^(v_j - 1) — exponential decay by click order
+      const V = bestFb.click_order ? 1 / Math.pow(2, bestFb.click_order - 1) : 0;
+
+      // T = t_j / t_j_max where t_j_max = page_size / reading_speed
+      // reading_speed from user profile (default 10 bytes/sec)
+      const pageSizeBytes = (bestFb as any).page_size_bytes ?? 0;
+      const readingSpeed = profile.reading_speed || 10; // bytes per second
+      const tMax = pageSizeBytes > 0 ? (pageSizeBytes / readingSpeed) * 1000 : 0; // in ms
+      const T = tMax > 0 ? Math.min((bestFb.dwell_time_ms ?? 0) / tMax, 1.0) : 0;
+
+      // P, S, B, E — binary (0 or 1)
       const P = bestFb.printed ? 1 : 0;
       const S = bestFb.saved ? 1 : 0;
       const B = bestFb.bookmarked ? 1 : 0;
       const E = bestFb.emailed ? 1 : 0;
-      const C = (bestFb.copy_paste_chars ?? 0) / maxCopy;
 
+      // C = c_j / c_j_total — fraction of total copy-paste in this session
+      const C = cTotal > 0 ? (bestFb.copy_paste_chars ?? 0) / cTotal : 0;
+
+      // σ_j = wV * V + wT * T + wP * P + wS * S + wB * B + wE * E + wC * C
       const importance =
-        profile.weight_v * V +
+        wV * V +
         profile.weight_t * T +
         profile.weight_p * P +
         profile.weight_s * S +

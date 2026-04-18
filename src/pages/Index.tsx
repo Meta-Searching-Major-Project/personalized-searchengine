@@ -13,6 +13,7 @@ import { updateLearningIndex, computeSQM } from "@/lib/api/learningIndex";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { useFeedbackTracker } from "@/hooks/useFeedbackTracker";
+import { ExtensionPrompt } from "@/components/ExtensionPrompt";
 
 export interface ResultWithId extends MergedResult {
   /** Maps engine name → search_results row id */
@@ -227,6 +228,9 @@ const Index = () => {
               </p>
             </>
           )}
+
+          <ExtensionPrompt />
+
           <form onSubmit={handleSearch} className="flex gap-2">
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
