@@ -7,22 +7,17 @@ import { supabase } from "@/integrations/supabase/client";
  */
 export async function updateLearningIndex(searchHistoryId: string): Promise<void> {
   try {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session) return;
-
-    const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/update-learning-index`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${session.access_token}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ search_history_id: searchHistoryId })
+    const { error, data } = await supabase.functions.invoke("update-learning-index", {
+      body: { search_history_id: searchHistoryId },
     });
 
-    if (!res.ok) {
-      const text = await res.text();
-      console.error("Failed to update learning index:", text);
-      throw new Error(`update-learning-index failed: ${text}`);
+    if (error) {
+      console.error("Failed to update learning index:", error.message);
+      throw error;
+    }
+    
+    if (data?.error) {
+      throw new Error(data.error);
     }
   } catch (e) {
     console.error("Learning index update error:", e);
@@ -37,22 +32,17 @@ export async function updateLearningIndex(searchHistoryId: string): Promise<void
  */
 export async function computeSQM(searchHistoryId: string): Promise<void> {
   try {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session) return;
-
-    const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/compute-sqm`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${session.access_token}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ search_history_id: searchHistoryId })
+    const { error, data } = await supabase.functions.invoke("compute-sqm", {
+      body: { search_history_id: searchHistoryId },
     });
 
-    if (!res.ok) {
-      const text = await res.text();
-      console.error("Failed to compute SQM:", text);
-      throw new Error(`compute-sqm failed: ${text}`);
+    if (error) {
+      console.error("Failed to compute SQM:", error.message);
+      throw error;
+    }
+    
+    if (data?.error) {
+      throw new Error(data.error);
     }
   } catch (e) {
     console.error("SQM computation error:", e);
