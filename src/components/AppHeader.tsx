@@ -1,7 +1,7 @@
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { useNavigate, useLocation } from "react-router-dom";
-import { Search, Settings, BarChart3, LogOut, LogIn } from "lucide-react";
+import { LogOut } from "lucide-react";
 
 const AppHeader = () => {
   const { user, signOut } = useAuth();
@@ -9,47 +9,61 @@ const AppHeader = () => {
   const location = useLocation();
 
   const navItems = [
-    { path: "/", icon: Search, label: "Search" },
+    { path: "/", label: "Search" },
     ...(user
       ? [
-          { path: "/settings", icon: Settings, label: "Settings" },
-          { path: "/analytics", icon: BarChart3, label: "Analytics" },
+          { path: "/settings", label: "Settings" },
+          { path: "/analytics", label: "Analytics" },
         ]
       : []),
   ];
 
+  const isHome = location.pathname === "/";
+
   return (
-    <header className="border-b bg-card">
-      <div className="mx-auto flex h-14 max-w-5xl items-center justify-between px-4">
-        <div className="flex items-center gap-1">
-          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary">
-            <Search className="h-4 w-4 text-primary-foreground" />
-          </div>
-          <span className="ml-2 font-semibold text-foreground">PersonaSearch</span>
+    <header className={`w-full z-50 transition-all ${isHome ? "absolute top-0 bg-transparent" : "sticky top-0 bg-white/90 backdrop-blur-md border-b border-slate-200"}`}>
+      <div className="mx-auto flex h-20 max-w-7xl items-center justify-between px-6">
+        
+        {/* Logo */}
+        <div className="flex items-center cursor-pointer" onClick={() => navigate("/")}>
+          <img src="/logo-full.png" alt="AMURA Logo" className="h-10 object-contain" />
         </div>
-        <nav className="flex items-center gap-1">
-          {navItems.map(({ path, icon: Icon, label }) => (
-            <Button
-              key={path}
-              variant={location.pathname === path ? "secondary" : "ghost"}
-              size="sm"
+
+        {/* Center Nav */}
+        <nav className="hidden md:flex items-center gap-8">
+          {navItems.map(({ path, label }) => (
+            <button
+              key={label}
+              className={`text-base font-medium transition-colors hover:text-slate-900 ${location.pathname === path ? "text-blue-600" : "text-slate-600"}`}
               onClick={() => navigate(path)}
             >
-              <Icon className="h-4 w-4" />
-              <span className="hidden sm:inline">{label}</span>
-            </Button>
+              {label}
+            </button>
           ))}
-          {user ? (
-            <Button variant="ghost" size="sm" onClick={signOut}>
-              <LogOut className="h-4 w-4" />
-            </Button>
-          ) : (
-            <Button variant="default" size="sm" onClick={() => navigate("/auth")}>
-              <LogIn className="h-4 w-4" />
-              <span className="hidden sm:inline">Sign In</span>
-            </Button>
-          )}
         </nav>
+
+        {/* Right Nav (User) */}
+        <div className="flex items-center gap-4">
+          {user ? (
+            <div className="flex items-center gap-3">
+              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-600 text-white font-semibold">
+                {user.email?.[0].toUpperCase() || "A"}
+              </div>
+              <span className="text-slate-700 font-medium hidden sm:inline">{user.email?.split('@')[0] || "Alex"}</span>
+              <Button variant="ghost" size="icon" onClick={signOut} className="text-slate-500 hover:text-slate-700">
+                <LogOut className="h-4 w-4" />
+              </Button>
+            </div>
+          ) : (
+            <button
+              className="text-base font-medium text-slate-700 hover:text-slate-900 transition-colors"
+              onClick={() => navigate("/auth")}
+            >
+              Sign In
+            </button>
+          )}
+        </div>
+
       </div>
     </header>
   );

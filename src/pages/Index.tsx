@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Search, Loader2, LogIn } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import AppHeader from "@/components/AppHeader";
+import AnimatedBackground from "@/components/AnimatedBackground";
 import SearchResultCard from "@/components/SearchResultCard";
 import EngineStatusBar from "@/components/EngineStatusBar";
 import RichWidgets from "@/components/RichWidgets";
@@ -218,60 +219,51 @@ const Index = () => {
   const hasResults = results.length > 0;
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className={`min-h-screen relative ${hasResults ? "bg-slate-50" : ""} overflow-hidden`}>
+      {!hasResults && <AnimatedBackground />}
       <AppHeader />
       <main
-        className={`flex flex-col items-center px-4 transition-all ${
-          hasResults ? "pt-6" : "justify-center"
+        className={`flex flex-col items-center px-4 transition-all relative z-10 ${
+          hasResults ? "pt-24" : "justify-center pt-20"
         }`}
-        style={{ minHeight: "calc(100vh - 3.5rem)" }}
+        style={{ minHeight: "100vh" }}
       >
-        <div className={`w-full ${hasResults ? "max-w-3xl" : "max-w-xl text-center"}`}>
-          {!hasResults && (
-            <>
-              <h1 className="mb-2 text-4xl font-bold tracking-tight text-foreground">
-                PersonaSearch
-              </h1>
-              <p className="mb-8 text-muted-foreground">
-                Personalized multi-engine search with intelligent rank aggregation
-              </p>
-            </>
-          )}
-
+        <div className={`w-full relative ${hasResults ? "max-w-3xl" : "max-w-4xl text-center"}`}>
           <ExtensionPrompt />
 
-          <form onSubmit={handleSearch} className="flex gap-2">
+          <form onSubmit={handleSearch} className={!hasResults ? "mx-auto max-w-2xl bg-white/60 backdrop-blur-xl border border-white/80 shadow-[0_8px_30px_rgb(0,0,0,0.04)] rounded-full p-2 flex items-center" : "flex gap-2"}>
             <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Search className={`absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 ${!hasResults ? "text-slate-400" : "text-muted-foreground"}`} />
               <Input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search the web..."
-                className="pl-10"
+                placeholder={!hasResults ? "Search with aggregated, personalized results..." : "Search the web..."}
+                className={`pl-12 ${!hasResults ? "h-12 border-0 bg-transparent shadow-none text-lg focus-visible:ring-0 placeholder:text-slate-400" : ""}`}
                 autoFocus
                 disabled={loading}
               />
             </div>
-            <Button type="submit" disabled={loading || !query.trim()}>
-              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Search"}
+            <Button 
+              type="submit" 
+              disabled={loading || !query.trim()} 
+              className={!hasResults 
+                ? "h-12 px-8 rounded-full bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-700 hover:to-cyan-600 text-white font-medium shadow-md transition-all flex items-center gap-2" 
+                : "bg-slate-500 hover:bg-slate-600 text-white"}
+            >
+              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : (
+                <>
+                  {!hasResults && <Search className="h-4 w-4" />}
+                  <span>Search</span>
+                </>
+              )}
             </Button>
           </form>
 
           {!hasResults && !loading && (
-            <div className="mt-4 space-y-2">
-              <p className="text-xs text-muted-foreground">
-                Aggregates results from Google, Bing &amp; DuckDuckGo using fuzzy rank
-                aggregation
+            <div className="mt-6 space-y-4">
+              <p className="text-[15px] font-medium text-slate-700">
+                Explore information across multiple sources, unified and personalized for you.
               </p>
-              {!user && (
-                <button
-                  onClick={() => navigate("/auth")}
-                  className="inline-flex items-center gap-1.5 rounded-full bg-primary/10 px-3 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/20"
-                >
-                  <LogIn className="h-3 w-3" />
-                  Sign in for personalized results &amp; search history
-                </button>
-              )}
             </div>
           )}
 
@@ -279,7 +271,7 @@ const Index = () => {
             <div className="mt-12 flex flex-col items-center gap-3">
               <Loader2 className="h-8 w-8 animate-spin text-primary" />
               <p className="text-sm text-muted-foreground">
-                Querying Google, Bing &amp; DuckDuckGo in parallel…
+                Querying multiple search engines in parallel...
               </p>
             </div>
           )}
@@ -321,6 +313,20 @@ const Index = () => {
           )}
         </div>
       </main>
+
+      {!hasResults && (
+        <footer className="absolute bottom-6 w-full text-center text-xs font-medium text-slate-500 flex justify-center gap-4 z-10">
+          <a href="#" className="hover:text-slate-700">Privacy</a>
+          <span className="text-slate-300">|</span>
+          <a href="#" className="hover:text-slate-700">Terms</a>
+          <span className="text-slate-300">|</span>
+          <a href="#" className="hover:text-slate-700">Support</a>
+          <span className="text-slate-300">|</span>
+          <a href="#" className="hover:text-slate-700">Careers</a>
+          <span className="text-slate-300">|</span>
+          <a href="#" className="hover:text-slate-700">Copyright</a>
+        </footer>
+      )}
     </div>
   );
 };

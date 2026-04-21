@@ -199,43 +199,64 @@ async function searchEngine(
   // 2. Fetch from SerpAPI
   try {
     const qp = config.queryParam || "q";
-    const params = new URLSearchParams({
-      [qp]: query,
-      api_key: apiKey,
-      engine,
-      num: "10",
-      ...(config.extraParams || {}),
-    });
 
-    const response = await fetch(
-      `https://serpapi.com/search.json?${params.toString()}`
-    );
+    const fetchPage = async (startParam?: Record<string, string>) => {
+      const params = new URLSearchParams({
+        [qp]: query,
+        api_key: apiKey,
+        engine,
+        num: "20",
+        count: "20",
+        ...(config.extraParams || {}),
+        ...(startParam || {}),
+      });
+      const response = await fetch(`https://serpapi.com/search.json?${params.toString()}`);
+      if (!response.ok) {
+        console.warn(`SerpAPI ${engine} warning: HTTP ${response.status}`);
+        return null;
+      }
+      return await response.json();
+    };
 
-    if (!response.ok) {
-      const errText = await response.text();
-      console.error(`SerpAPI ${engine} error [${response.status}]:`, errText);
-      return { engine, results: [], error: `HTTP ${response.status}` };
+    const pagesToFetch = [fetchPage()];
+
+    // Multi-page fetching for engines that heavily truncate on first page
+    if (engine === "google") pagesToFetch.push(fetchPage({ start: "10" }));
+    if (engine === "bing") pagesToFetch.push(fetchPage({ first: "11" }));
+    if (engine === "yahoo") pagesToFetch.push(fetchPage({ b: "11" }));
+
+    const pageDatas = (await Promise.all(pagesToFetch)).filter(Boolean);
+    if (pageDatas.length === 0) {
+      return { engine, results: [], error: `Failed to fetch from SerpAPI` };
     }
 
-    const data = await response.json();
+    // Use the first page for rich blocks
+    const data = pageDatas[0];
+    const rich = extractRichBlocks(data);
 
-    // Resolve the results array using the configured key
     const resultsKey = config.resultsKey || "organic_results";
-    const rawResults = getNestedKey(data, resultsKey) || [];
     const parser = config.parseResult || parseStandard;
 
-    const organicResults: SerpResult[] = [];
-    if (Array.isArray(rawResults)) {
-      for (let i = 0; i < rawResults.length; i++) {
-        const parsed = parser(rawResults[i], i);
-        if (parsed) organicResults.push(parsed);
+    let organicResults: SerpResult[] = [];
+
+    for (const pd of pageDatas) {
+      const rawResults = getNestedKey(pd, resultsKey) || [];
+      if (Array.isArray(rawResults)) {
+        for (let i = 0; i < rawResults.length; i++) {
+          const parsed = parser(rawResults[i], organicResults.length);
+          // Deduplicate across pages
+          if (parsed && !organicResults.some((r) => r.link === parsed.link)) {
+            organicResults.push(parsed);
+          }
+        }
       }
     }
 
-    const rich = extractRichBlocks(data);
+    // Hard cap at exactly 20 results maximum for every engine
+    organicResults = organicResults.slice(0, 20);
 
-    // 3. Upsert cache (fire-and-forget)
-    serviceClient
+    // 3. Upsert cache
+    const { error: cacheError } = await serviceClient
       .from("search_cache")
       .upsert(
         {
@@ -246,10 +267,9 @@ async function searchEngine(
           fetched_at: new Date().toISOString(),
         },
         { onConflict: "query_normalized,engine" }
-      )
-      .then(({ error }: any) => {
-        if (error) console.warn(`Cache write failed for ${engine}:`, error.message);
-      });
+      );
+    
+    if (cacheError) console.warn(`Cache write failed for ${engine}:`, cacheError.message);
 
     return { engine, results: organicResults, rich };
   } catch (error) {
@@ -621,7 +641,7 @@ Deno.serve(async (req) => {
             {
               query_embedding: embeddingStr,
               match_user_id: authUser.id,
-              match_threshold: 0.2,
+              match_threshold: 0.75,
               match_count: 20,
             }
           );
@@ -662,7 +682,7 @@ Deno.serve(async (req) => {
               const matches = doc.query_matches || [];
               return matches.some((q: string) => {
                 const matchWords = q.toLowerCase().split(/\s+/);
-                return queryWords.some((w) => matchWords.includes(w));
+                return queryWords.every((w) => matchWords.includes(w));
               });
             });
             learningResults.results = relevant.map((doc, i) => ({
