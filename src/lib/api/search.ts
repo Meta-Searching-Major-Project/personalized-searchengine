@@ -31,6 +31,7 @@ export interface SearchResponse {
   success: boolean;
   query?: string;
   aggregation_method?: string;
+  query_intent?: string;
   merged?: MergedResult[];
   engineResults?: EngineSummary[];
   richBlocks?: RichBlocks;
@@ -39,10 +40,11 @@ export interface SearchResponse {
 
 export async function multiSearch(
   query: string,
-  aggregationMethod: string = "borda"
+  aggregationMethod: string = "borda",
+  preferredEngines: string[] = []
 ): Promise<SearchResponse> {
   const { data, error } = await supabase.functions.invoke("multi-search", {
-    body: { query, aggregation_method: aggregationMethod },
+    body: { query, aggregation_method: aggregationMethod, preferred_engines: preferredEngines },
   });
 
   if (error) {

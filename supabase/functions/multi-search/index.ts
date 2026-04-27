@@ -127,6 +127,61 @@ function normalizeQuery(q: string): string {
   return q.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
+// ─── Query Intent Detection ──────────────────────────────────────────
+
+type QueryIntent = "generic" | "research" | "news" | "local" | "coding" | "regional";
+
+interface IntentResult {
+  intent: QueryIntent;
+  regionalEngine?: string;
+}
+
+function detectQueryIntent(query: string): IntentResult {
+  // Regional: check Unicode script ranges first (before any word splitting)
+  if (/[\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F]/.test(query))
+    return { intent: "regional", regionalEngine: "naver" };       // Korean
+  if (/[\u4E00-\u9FFF\u3400-\u4DBF\uF900-\uFAFF]/.test(query))
+    return { intent: "regional", regionalEngine: "baidu" };       // Chinese
+  if (/[\u0400-\u04FF]/.test(query))
+    return { intent: "regional", regionalEngine: "yandex" };      // Cyrillic
+
+  const q = query.toLowerCase();
+  if (/\b(paper|research|study|journal|scholar|pdf|dataset|thesis)\b/.test(q))
+    return { intent: "research" };
+  if (/\b(today|latest|breaking|update|current|news)\b/.test(q))
+    return { intent: "news" };
+  if (/\b(near me|hotel|restaurant|map|route|weather)\b/.test(q))
+    return { intent: "local" };
+  if (/\b(error|bug|github|code|npm|stackoverflow)\b/.test(q))
+    return { intent: "coding" };
+
+  // Generic: ≤3 words with no special modifiers
+  return { intent: "generic" };
+}
+
+function selectEnginesForIntent(
+  { intent, regionalEngine }: IntentResult,
+  preferredEngines: string[]
+): EngineConfig[] {
+  // User's manual engine override always wins
+  if (preferredEngines.length > 0) {
+    const selected = WEB_ENGINES.filter((e) => preferredEngines.includes(e.engine));
+    if (selected.length > 0) return selected;
+  }
+
+  const routingMap: Record<QueryIntent, string[]> = {
+    generic:  ["google", "bing", "duckduckgo", "yahoo", "yandex"],
+    research: ["google", "bing", "google_scholar"],
+    news:     ["google", "bing", "google_news"],
+    local:    ["google", "bing"],
+    coding:   ["google", "bing", "duckduckgo"],
+    regional: ["google", "bing", regionalEngine ?? "google"],
+  };
+
+  const names = routingMap[intent];
+  return WEB_ENGINES.filter((e) => names.includes(e.engine));
+}
+
 // ─── Extract rich blocks from a SerpAPI response ────────────────────
 function extractRichBlocks(data: any): RichBlocks {
   const rich: RichBlocks = {};
@@ -562,7 +617,7 @@ Deno.serve(async (req) => {
       }
     }
 
-    const { query, aggregation_method } = await req.json();
+    const { query, aggregation_method, preferred_engines } = await req.json();
 
     if (!query || typeof query !== "string" || query.trim().length === 0) {
       return new Response(
@@ -589,11 +644,18 @@ Deno.serve(async (req) => {
 
     const trimmedQuery = query.trim();
     const method = aggregation_method || "borda";
-    console.log(`Multi-engine search [${method}] across ${WEB_ENGINES.length} engines:`, trimmedQuery);
 
-    // Query all general engines in parallel (cache-first per engine)
+    // ── Intent detection + dynamic engine selection ──
+    const intentResult = detectQueryIntent(trimmedQuery);
+    const selectedEngines = selectEnginesForIntent(
+      intentResult,
+      Array.isArray(preferred_engines) ? preferred_engines : []
+    );
+    console.log(`Multi-engine search [${method}] intent=${intentResult.intent} engines=${selectedEngines.map(e=>e.engine).join(",")}:`, trimmedQuery);
+
+    // Query selected engines in parallel (cache-first per engine)
     const engineResults: EngineResult[] = await Promise.all(
-      WEB_ENGINES.map((cfg) => searchEngine(trimmedQuery, cfg, apiKey, serviceClient))
+      selectedEngines.map((cfg) => searchEngine(trimmedQuery, cfg, apiKey, serviceClient))
     );
 
     // Merge rich blocks from all engines
@@ -750,6 +812,7 @@ Deno.serve(async (req) => {
       success: true,
       query: trimmedQuery,
       aggregation_method: method,
+      query_intent: intentResult.intent,
       merged,
       richBlocks,
       engineResults: engineResults.map((er) => ({

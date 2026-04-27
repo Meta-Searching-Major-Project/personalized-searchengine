@@ -1,219 +1,182 @@
-# PersonaSearch — Architecture & File Guide
+# PersonaSearch — Comprehensive Architecture & Documentation
 
-A personalized meta-search engine that queries multiple search engines in parallel via SerpApi, aggregates results with fuzzy rank-aggregation algorithms, learns from user behavior, and serves rich answer widgets (weather, dictionary, images, knowledge graph, answer box).
+PersonaSearch is a personalized meta-search engine that queries multiple search engines in parallel, aggregates their results, learns from user behavior to personalize future searches, and builds a local web index.
 
----
+This document serves as the definitive guide to the system's architecture, components, workflows, logic, and interactions.
 
-## Tech stack
-- **Frontend**: React 18 + Vite + TypeScript + Tailwind + shadcn/ui
-- **Routing**: React Router
-- **State**: React Query + local React state
-- **Backend (Lovable Cloud)**: Supabase Postgres + Auth + Edge Functions (Deno)
-- **Search provider**: SerpApi (Google, Bing, DuckDuckGo, Yahoo, Yandex, Baidu, Naver, Brave, Google Scholar, Google News)
-- **Embeddings / AI**: Google Generative Language API (gemini-embedding-001, 768-dim vectors via MRL)
+## 1. System Overview & Technology Stack
 
----
+The system is composed of three main parts:
+1. **Frontend Web App**: Provides the search interface, user authentication, and settings.
+2. **Browser Extension**: Silently tracks user interaction with search results (dwell time, copy-pasting) to provide implicit feedback.
+3. **Backend & Database**: Hosted on Supabase, handling search aggregation, ranking, machine learning (personalization), indexing, and user data storage.
 
-## Top-level files
-
-| File | Purpose |
-|---|---|
-| `index.html` | HTML shell — `<head>` SEO tags + `<div id="root">` mount point |
-| `vite.config.ts` | Vite bundler config, dev server, path aliases (`@/` → `src/`) |
-| `tailwind.config.ts` | Tailwind theme — semantic color tokens, fonts, animations |
-| `postcss.config.js` | PostCSS pipeline (Tailwind + Autoprefixer) |
-| `tsconfig*.json` | TypeScript compiler options |
-| `eslint.config.js` | Linter rules |
-| `components.json` | shadcn/ui generator config |
-| `package.json` | Dependencies + npm scripts |
-| `vitest.config.ts` | Unit-test runner config |
-| `README.md` | Project quick-start |
-| `.env` | Auto-generated Supabase URL/anon key (DO NOT EDIT) |
+### Tech Stack
+- **Frontend**: React 18, Vite, TypeScript, Tailwind CSS, shadcn/ui, React Router, React Query.
+- **Backend (Lovable Cloud)**: Supabase PostgreSQL, Supabase Auth, Deno Edge Functions.
+- **Search Provider**: SerpApi (Google, Bing, DuckDuckGo, Yahoo, Yandex, Baidu, Naver, Brave, Google Scholar, Google News).
+- **AI & Embeddings**: Google Generative Language API (`gemini-embedding-001`, 768-dimensional vectors) for semantic search.
 
 ---
 
-## `src/` — Frontend application
+## 2. Core Workflows & Data Flow
 
-### `src/main.tsx`
-React entry point — renders `<App />` into `#root`.
+### 2.1 The Search Request Flow
 
-### `src/App.tsx`
-Top-level component. Sets up:
-- `QueryClientProvider` (React Query)
-- `TooltipProvider`, toast renderers
-- `BrowserRouter` + route table
-- `AuthProvider` wrapper
+When a user submits a search query, the following steps occur:
 
-### `src/App.css`, `src/index.css`
-- `index.css` — global Tailwind layer + **HSL design tokens** (`--background`, `--primary`, etc.). All theming lives here.
-- `App.css` — minor app-level overrides.
+1. **Query Submission**: The frontend (`Index.tsx`) calls the `multi-search` edge function via `src/lib/api/search.ts`.
+2. **Parallel Fetching**: The `multi-search` function queries all configured web engines via SerpApi.
+   - It checks the `search_cache` table first (7-day TTL).
+   - If a cache miss occurs, it fetches from SerpApi, extracts organic results and "Rich Blocks" (Weather, Dictionary, etc.), and upserts the cache.
+3. **Local Index Search**: If the local `web_pages` index has ≥100 crawled pages, a hybrid search (vector + full-text) is performed on it.
+4. **Personalized "Learned" Engine (N+1)**: If the user is signed in:
+   - The query is embedded using `generate-embedding`.
+   - The system queries the `feedback_learning_index` using a vector similarity search (`match_learned_documents` RPC) to find highly relevant documents from past interactions.
+   - These results act as an additional search engine.
+5. **Deduplication & Aggregation**:
+   - Results are grouped by normalized URL.
+   - A chosen rank aggregation algorithm (e.g., Borda, Shimura, Biased) merges the rankings into a final sorted list.
+6. **Background Crawling Queue**: The unique URLs from the search results are asynchronously inserted into the `crawl_queue` table.
+7. **Response to Client**: The aggregated results and Rich Blocks are returned to the frontend and rendered.
+8. **Telemetry Recording**: The frontend writes the search query to `search_history` and the returned results to `search_results`.
 
-### `src/vite-env.d.ts`
-TypeScript ambient types for Vite env vars.
+### 2.2 Implicit Feedback Tracking (The 7-Tuple)
 
----
+PersonaSearch learns from user interactions using a 7-tuple signal (V, T, P, S, B, E, C):
 
-### `src/pages/` — Route components
+1. **V (Click Order)**: Tracked by the frontend when a user clicks a result.
+2. **T (Dwell Time)**: Tracked by the browser extension. The background service worker measures active tab time and normalizes it against the page size and user's reading speed.
+3. **P (Printed), S (Saved), B (Bookmarked), E (Emailed)**: Tracked by frontend buttons on each `SearchResultCard`.
+4. **C (Copy-Paste)**: Tracked by the browser extension content script, counting characters copied from the result page.
 
-| File | Route | Description |
-|---|---|---|
-| `Index.tsx` | `/` | Main search page. Handles guest + signed-in users, calls `multi-search`, renders `RichWidgets` + `SearchResultCard` list, persists history for signed-in users. |
-| `Auth.tsx` | `/auth` | Sign-up / sign-in form (email + Google OAuth). |
-| `SettingsPage.tsx` | `/settings` | Lets signed-in users tune feedback weights (wV…wC), reading speed, default aggregation method. |
-| `AnalyticsPage.tsx` | `/analytics` | Charts of per-engine SQM scores, search history, ability to re-run queries. |
-| `NotFound.tsx` | `*` | 404 page. |
+All these signals are synced to the `user_feedback` table.
 
----
+### 2.3 Post-Session Learning & Optimization
 
-### `src/components/` — Reusable UI
+After a search session, two background edge functions run to update the system:
 
-| File | Description |
-|---|---|
-| `AppHeader.tsx` | Top nav bar — logo, links to Settings/Analytics, sign-in/out button. |
-| `EngineStatusBar.tsx` | Below the search box: shows result count, query time, aggregation method badge, and per-engine status pill (✅/❌, count, cached?). |
-| `RichWidgets.tsx` | **NEW** — renders SerpApi answer blocks: Weather card, Dictionary entry, Images carousel, Knowledge Graph card, Answer Box. Shown above the result list. |
-| `SearchResultCard.tsx` | One result row — title, URL, snippet, source-engine badges, action buttons (save, bookmark, email, print), tracks dwell time + copy events. |
-| `NavLink.tsx` | Header link styling helper. |
-| `ProtectedRoute.tsx` | Redirects to `/auth` if user not signed in. Wraps Settings + Analytics. |
-| `ui/*` | shadcn/ui primitives (Button, Card, Input, Dialog, …). Generated — usually don't edit directly. |
+1. **`update-learning-index`**:
+   - Computes a document importance score ($I(d)$) based on the 7-tuple.
+   - Fetches an embedding for the document's content.
+   - Upserts the document into `feedback_learning_index` using an exponential moving average to update its `learned_score`.
+   - Penalizes ignored documents using an exponential decay factor.
+2. **`compute-sqm`**:
+   - Calculates the Search Quality Measure (SQM) for each engine using Spearman rank-order correlation between the engine's original ranking and the user's implicit preference ranking.
+   - Updates the `search_quality_measures` table with a running average of the engine's performance.
 
----
+### 2.4 Background Crawling
 
-### `src/contexts/`
-
-| File | Description |
-|---|---|
-| `AuthContext.tsx` | Wraps Supabase auth — exposes `user`, `session`, `signOut()`. Listens to `onAuthStateChange`. |
-
----
-
-### `src/hooks/`
-
-| File | Description |
-|---|---|
-| `useFeedbackTracker.ts` | Tracks the 7-tuple per result: click order (V), dwell time (T), print (P), save (S), bookmark (B), email (E), copy-paste (C). Persists each signal to `user_feedback`. |
-| `use-mobile.tsx` | Returns `true` if viewport < md breakpoint. |
-| `use-toast.ts` | Re-export of shadcn toast hook. |
+1. The `multi-search` function adds URLs to `crawl_queue`.
+2. The `crawl-page` edge function processes this queue:
+   - Fetches the HTML.
+   - Extracts clean text (strips scripts/styles).
+   - Generates an embedding for the content.
+   - Upserts the data into the `web_pages` table, computing a SHA-256 hash for deduplication.
+   - Updates the `crawl_queue` status.
 
 ---
 
-### `src/lib/`
+## 3. Component Breakdown
 
-| File | Description |
-|---|---|
-| `lib/utils.ts` | `cn()` helper — merges Tailwind classes. |
-| `lib/api/search.ts` | TypeScript client for `multi-search` edge function. Defines `MergedResult`, `EngineSummary`, `RichBlocks`, `SearchResponse`. |
-| `lib/api/learningIndex.ts` | Calls `update-learning-index` and `compute-sqm` edge functions after each search session. |
+### 3.1 Frontend (`src/`)
 
----
+- **Pages (`src/pages/`)**:
+  - `Index.tsx`: The main search interface. Handles queries, renders widgets and results.
+  - `Auth.tsx`: Handles user authentication via Supabase Auth.
+  - `SettingsPage.tsx`: Allows users to configure feedback weights ($w_V \dots w_C$), reading speed, and the default rank aggregation method.
+  - `AnalyticsPage.tsx`: Displays charts of SQM scores, search history, and feedback metrics.
+- **Components (`src/components/`)**:
+  - `RichWidgets.tsx`: Renders SerpApi answer blocks (Weather, Dictionary, Knowledge Graph, etc.).
+  - `SearchResultCard.tsx`: Displays individual search results with action buttons (Save, Bookmark, etc.) and tracks interactions.
+  - `EngineStatusBar.tsx`: Shows statistics on which engines contributed to the results.
+- **Hooks (`src/hooks/`)**:
+  - `useFeedbackTracker.ts`: Central logic for recording user interactions and syncing them to `user_feedback`.
+- **API Clients (`src/lib/api/`)**:
+  - `search.ts`: Calls the `multi-search` endpoint.
+  - `learningIndex.ts`: Triggers the post-session optimization functions.
 
-### `src/integrations/supabase/`
-**DO NOT EDIT — auto-generated.**
+### 3.2 Browser Extension (`extension/`)
 
-| File | Description |
-|---|---|
-| `client.ts` | Pre-configured Supabase JS client — import via `import { supabase } from "@/integrations/supabase/client"`. |
-| `types.ts` | TypeScript types generated from the live database schema. |
+- **`manifest.json`**: Chrome extension manifest (MV3).
+- **`background.js` (Service Worker)**:
+  - Manages active tab state and window focus.
+  - Accurately tracks active dwell time.
+  - Periodically flushes dwell time data to the `track-dwell` edge function.
+- **`content.js`**:
+  - Injected into all web pages.
+  - Estimates page size (in bytes) to normalize dwell time.
+  - Listens to `copy` events and reports copied character counts to the background script.
 
-### `src/test/`
-- `setup.ts` — Vitest global setup.
-- `example.test.ts` — Sample test.
+### 3.3 Backend Edge Functions (`supabase/functions/`)
 
----
-
-## `supabase/` — Backend
-
-### `supabase/config.toml`
-Project ID + per-function settings (`verify_jwt`). Auto-managed.
-
-### `supabase/migrations/`
-**Read-only.** Append-only SQL history of every schema change. Created by the migration tool.
-
-### `supabase/functions/` — Edge Functions (Deno)
-
-| Function | Description |
-|---|---|
-| `multi-search/index.ts` | **The core**. Accepts `{ query, aggregation_method }`. For each of 10 web engines: checks `search_cache` (7-day TTL); on miss, calls SerpApi and upserts cache. Extracts rich blocks. For signed-in users, embeds the query and pulls personalized docs. Queries the local `web_pages` index (if ≥100 crawled pages) as an additional engine. Deduplicates, runs rank aggregation, returns results. After responding, **fire-and-forget queues** all result URLs into `crawl_queue` and triggers `crawl-page`. |
-| `generate-embedding/index.ts` | Calls Google Generative Language API (gemini-embedding-001) → returns 768-dim embedding for arbitrary text. Supports `task_type` (RETRIEVAL_QUERY / RETRIEVAL_DOCUMENT) and exponential backoff retry. |
-| `update-learning-index/index.ts` | After a search session, computes per-document importance score `r_j` from the 7-tuple feedback, then upserts into `feedback_learning_index` using exponential moving average (α=0.3). Chunks long texts (>2000 chars) before embedding. |
-| `compute-sqm/index.ts` | Computes Spearman rank-order correlation between user's preference ranking R and each engine's original ranking q. Updates `search_quality_measures` with running average. |
-| **`crawl-page/index.ts`** | **NEW** — Processes the `crawl_queue`: fetches pages (10s timeout, browser UA), extracts clean text (strips HTML/scripts/styles), computes SHA-256 content hash for dedup, generates 768-dim embeddings, upserts into `web_pages`. Processes batches of 5–10 URLs with politeness delays. |
-| **`search-local-index/index.ts`** | **NEW** — Hybrid search over the local `web_pages` index. Embeds the query, runs vector similarity (60%) + full-text tsvector search (40%), returns results in SerpResult format. |
+- **`multi-search`**: The central orchestrator. Queries SerpApi, local index, and learning index. Performs rank aggregation. Queues URLs for crawling.
+- **`update-learning-index`**: Processes session feedback to update `feedback_learning_index`. Chunks long text (>2000 chars) before embedding.
+- **`compute-sqm`**: Calculates the Spearman correlation between engine rankings and user preference, updating `search_quality_measures`.
+- **`crawl-page`**: Background worker that fetches URLs, extracts text, generates embeddings, and populates the local `web_pages` index.
+- **`search-local-index`**: Performs hybrid search (vector similarity + full-text) on the `web_pages` table.
+- **`generate-embedding`**: Wraps the Google Generative Language API to convert text into 768-dim vectors.
+- **`track-dwell`**: Endpoint used by the browser extension to report dwell time and copy-paste events directly to the database.
 
 ---
 
-## Database tables (public schema)
+## 4. Database Schema
 
-| Table | Purpose |
-|---|---|
-| `profiles` | Per-user feedback weights (wV…wC), reading speed, default aggregation method. |
-| `user_roles` | Role assignments (`admin` / `user`) — used by `has_role()` SQL function for RLS. |
-| `search_history` | One row per search query a signed-in user makes. |
-| `search_results` | Raw per-engine result rows for each `search_history` entry — the source-of-truth for feedback joins. |
-| `user_feedback` | The 7-tuple recorded per `search_result_id`: click_order, dwell_time_ms, printed, saved, bookmarked, emailed, copy_paste_chars. |
-| `search_quality_measures` | Per-user, per-engine SQM score (rolling Spearman ρ) + query count. |
-| `feedback_learning_index` | The "world wide web index built from your behavior" — URL + title + snippet + 768-dim embedding + learned_score + matching queries. Acts as the (N+1)-th search engine. |
-| `search_cache` | Global shared cache of raw SerpApi results per (query, engine). 7-day TTL. Indexed on `query_normalized`. |
-| **`web_pages`** | **NEW** — The local web index. Stores URL, domain, extracted text, meta description, content hash (SHA-256 dedup), 768-dim embedding, tsvector (full-text), word count, crawl metadata. HNSW + GIN indexed. Grows with every search as URLs are crawled. |
-| **`crawl_queue`** | **NEW** — Lightweight job queue for pages to crawl. URLs are inserted by `multi-search` after each search, processed by `crawl-page`. Tracks priority (more engines = higher), attempt count, and status. |
+### 4.1 Tables
 
-### Database functions
-- `has_role(user_id, role)` — security-definer role check, used in RLS policies.
-- `match_learned_documents(query_embedding, user_id, threshold, count)` — vector cosine search over `feedback_learning_index`.
-- `search_local_index(query_embedding, query_text, match_count)` — hybrid vector + full-text search over `web_pages`.
-- `handle_new_user()` — trigger that creates a `profiles` + `user_roles` row when a new auth user signs up.
-- `update_updated_at_column()` — generic timestamp trigger.
-- `web_pages_tsv_trigger()` — auto-updates tsvector column on `web_pages` insert/update.
+| Table | Description |
+|-------|-------------|
+| `profiles` | Stores user settings: feedback weights, reading speed, and default aggregation method. |
+| `user_roles` | Manages role assignments (e.g., `admin`, `user`) for Row Level Security (RLS). |
+| `search_history` | Logs every search query executed by signed-in users. |
+| `search_results` | Stores the raw results returned by each engine for a specific `search_history` entry. Acts as the foreign key target for feedback. |
+| `user_feedback` | Stores the 7-tuple telemetry for a specific `search_result_id`. |
+| `search_quality_measures` | Tracks the SQM score (rolling Spearman $\rho$) per user and per engine. |
+| `feedback_learning_index` | The personalized index. Stores URL, text, embedding, and `learned_score` for interacted documents. |
+| `search_cache` | Global cache for SerpApi results to reduce API costs. (7-day TTL). |
+| `web_pages` | The local web index. Stores crawled text, full-text `tsvector`, and vector embeddings for hybrid search. |
+| `crawl_queue` | Queue for background crawling jobs. Prioritized by how many engines returned the URL. |
 
-### RLS posture
-- `search_history`, `user_feedback`, `feedback_learning_index`, `search_quality_measures`, `profiles`, `user_roles` → users see their own rows; admins see all.
-- `search_results` → users see rows linked to their own `search_history`.
-- `search_cache`, `web_pages` → readable by anyone (shared resources); writes locked to service role.
-- `crawl_queue` → service role only (no client-side access).
+### 4.2 Key PostgreSQL Functions
 
----
+- `match_learned_documents(query_embedding, user_id, threshold, count)`: Performs cosine similarity search over `feedback_learning_index`.
+- `search_local_index(query_embedding, query_text, match_count)`: Hybrid search over `web_pages` combining pgvector and `tsvector` scores.
 
-## Request flow (one search)
+### 4.3 Row Level Security (RLS)
 
-```
-User types query in Index.tsx
-        │
-        ▼
-multiSearch(query, method)  (src/lib/api/search.ts)
-        │
-        ▼
-Edge function: multi-search
-        │
-        ├─► For each of 6 engines:
-        │       ├─ check search_cache (Postgres, indexed)
-        │       │     ├─ HIT  → use cached organic_results + rich_blocks
-        │       │     └─ MISS → fetch SerpApi → upsert cache
-        │       └─ extract rich blocks (weather/dict/images/KG/answer box)
-        │
-        ├─► (if signed in) embed query → match_learned_documents()
-        │       → adds personalized "learned" engine
-        │
-        ├─► dedupe by URL
-        ├─► aggregate (Borda / Shimura / … / Biased)
-        │
-        ▼
-Response { merged, richBlocks, engineResults }
-        │
-        ▼
-Index.tsx
-        ├─► RichWidgets renders weather/dictionary/images/KG/answer
-        ├─► SearchResultCard list renders ranked results
-        └─► (signed-in) writes search_history + search_results
-                Then useFeedbackTracker collects the 7-tuple
-                On next search → updateLearningIndex + computeSQM
-```
+- Personal data (`search_history`, `user_feedback`, `profiles`, `search_quality_measures`, `feedback_learning_index`) is strictly isolated. Users can only read/write their own rows.
+- Global resources (`search_cache`, `web_pages`) are publicly readable but only writable by the service role.
+- Internal mechanics (`crawl_queue`) are completely restricted to the service role.
 
 ---
 
-## How to extend
+## 5. Core Algorithms
 
-- **Add another search engine**: add an `EngineConfig` entry to the `WEB_ENGINES` array in `multi-search/index.ts` with optional `queryParam`, `extraParams`, `resultsKey`, and `parseResult` fields. SerpApi engine names: `youtube`, `google_shopping`, `ecosia` (mirrors Bing), etc.
-- **Add a new rich widget**: add the field in `extractRichBlocks()` in the edge function + update `RichBlocks` type in `src/lib/api/search.ts` + add a renderer in `src/components/RichWidgets.tsx`.
-- **Add a new aggregation method**: add a function in `multi-search/index.ts` and a case in `rankResults()` + label in `src/components/EngineStatusBar.tsx`.
-- **Tune cache TTL**: change `CACHE_TTL_MS` in `multi-search/index.ts` (currently 7 days).
-- **Theme colors**: edit HSL tokens in `src/index.css`.
+### 5.1 Rank Aggregation Algorithms
+PersonaSearch supports multiple methods to merge rankings from different engines:
+1. **Borda Count**: Assigns points based on rank. The "learned" engine receives a massive 5x weight multiplier.
+2. **Shimura (Fuzzy Majority)**: Uses fuzzy logic to evaluate how often document A beats document B across all engines.
+3. **Modal Rank**: Ranks based on the most frequent rank position a document receives.
+4. **MFO (Maximum Fuzzy Optimistic)**: Considers the highest rank a document achieved across any engine.
+5. **MBV (Mean-Variance)**: Rewards documents with low average rank and low variance (consistency across engines).
+6. **OWA (Ordered Weighted Averaging)**: Applies specialized weighting vectors to ranked preferences.
+7. **Biased (SQM-weighted Borda)**: Borda count, but each engine's points are multiplied by its historical SQM score for that specific user.
+
+### 5.2 Document Importance ($I(d)$)
+Based on Beg & Ahmad (2007), calculated in `update-learning-index`:
+$I(d) = w_V \cdot V + w_T \cdot T + w_P \cdot P + w_S \cdot S + w_B \cdot B + w_E \cdot E + w_C \cdot C$
+
+Where:
+- $V = 1 / 2^{(click\_order - 1)}$
+- $T = \min(dwell\_time / max\_expected\_time, 1.0)$
+- $C = copied\_chars / total\_copied\_in\_session$
+- Others are binary (0 or 1).
+- $w_V$ is strictly enforced as 1.0.
+
+---
+
+## 6. Extending the System
+
+- **Adding a New Search Engine**: Update the `WEB_ENGINES` array in `supabase/functions/multi-search/index.ts`. Add a custom parser if the SerpApi output format is unique.
+- **Adding a Rich Widget**: Update `extractRichBlocks()` in the edge function, define types in `src/lib/api/search.ts`, and create the React UI in `src/components/RichWidgets.tsx`.
+- **Modifying Aggregation**: Add a new function in `multi-search/index.ts`, update `rankResults()`, and add the new option to the frontend `SettingsPage.tsx` and `EngineStatusBar.tsx`.

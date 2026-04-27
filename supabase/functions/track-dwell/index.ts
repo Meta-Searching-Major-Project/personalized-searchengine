@@ -8,9 +8,14 @@ const corsHeaders = {
 
 /**
  * track-dwell: REST endpoint for the Chrome extension to report
- * dwell time (T), page size, and copy-paste (C) data.
+ * dwell time (T), page size, copy-paste (C), and extended feedback signals.
  *
- * Accepts: { search_result_id, dwell_time_ms, page_size_bytes?, copy_paste_chars? }
+ * Accepts: {
+ *   search_result_id, dwell_time_ms,
+ *   page_size_bytes?, copy_paste_chars?,
+ *   scroll_depth?, highlight_count?, hover_time_ms?,
+ *   quick_bounce?, repeat_visit?
+ * }
  * Auth: Bearer token from the signed-in user
  */
 
@@ -29,35 +34,42 @@ Deno.serve(async (req) => {
     }
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
+    const anonKey    = Deno.env.get("SUPABASE_ANON_KEY")!;
     const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const supabase = createClient(supabaseUrl, serviceKey);
-    
-    // Verify the user's token by calling the Auth REST API directly to avoid local ES256 decoding issues
-    const authResponse = await fetch(`${supabaseUrl}/auth/v1/user`, {
-      headers: {
-        Authorization: authHeader,
-        apikey: anonKey,
-      },
+    const supabase   = createClient(supabaseUrl, serviceKey);
+
+    // Verify token via Auth REST API (avoids local ES256 key issues)
+    const authResp = await fetch(`${supabaseUrl}/auth/v1/user`, {
+      headers: { Authorization: authHeader, apikey: anonKey },
     });
 
-    if (!authResponse.ok) {
+    if (!authResp.ok) {
       return new Response(JSON.stringify({ error: "Unauthorized" }), {
         status: 401,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    const user = await authResponse.json();
-    if (!user || !user.id) {
+    const user = await authResp.json();
+    if (!user?.id) {
       return new Response(JSON.stringify({ error: "Unauthorized" }), {
         status: 401,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    const { search_result_id, dwell_time_ms, page_size_bytes, copy_paste_chars } =
-      await req.json();
+    const body = await req.json();
+    const {
+      search_result_id,
+      dwell_time_ms,
+      page_size_bytes,
+      copy_paste_chars,
+      scroll_depth,
+      highlight_count,
+      hover_time_ms,
+      quick_bounce,
+      repeat_visit,
+    } = body;
 
     if (!search_result_id || !dwell_time_ms) {
       return new Response(
@@ -65,8 +77,6 @@ Deno.serve(async (req) => {
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
-
-    const supabase = createClient(supabaseUrl, serviceKey);
 
     // Check if feedback row already exists
     const { data: existing } = await supabase
@@ -77,31 +87,28 @@ Deno.serve(async (req) => {
       .maybeSingle();
 
     const updateFields: Record<string, unknown> = {
-      dwell_time_ms: dwell_time_ms,
+      // Take max dwell time (extension may report multiple times; web fallback also reports)
+      dwell_time_ms: existing?.dwell_time_ms && existing.dwell_time_ms > dwell_time_ms
+        ? existing.dwell_time_ms
+        : dwell_time_ms,
       updated_at: new Date().toISOString(),
     };
 
-    if (page_size_bytes && page_size_bytes > 0) {
-      updateFields.page_size_bytes = page_size_bytes;
+    if (page_size_bytes  && page_size_bytes  > 0) updateFields.page_size_bytes = page_size_bytes;
+    if (copy_paste_chars && copy_paste_chars > 0) {
+      // Accumulate: extension may report copy events incrementally
+      updateFields.copy_paste_chars = (existing?.copy_paste_chars ?? 0) + copy_paste_chars;
     }
 
-    if (copy_paste_chars && copy_paste_chars > 0) {
-      // Accumulate copy-paste chars (extension may report multiple times)
-      const prevChars = existing?.copy_paste_chars ?? 0;
-      updateFields.copy_paste_chars = prevChars + copy_paste_chars;
-    }
+    // Extended signals — store if provided
+    if (scroll_depth   !== undefined) updateFields.scroll_depth   = scroll_depth;
+    if (highlight_count !== undefined) updateFields.highlight_count = highlight_count;
+    if (hover_time_ms  !== undefined) updateFields.hover_time_ms  = hover_time_ms;
+    if (quick_bounce   !== undefined) updateFields.quick_bounce   = quick_bounce;
+    if (repeat_visit   !== undefined) updateFields.repeat_visit   = repeat_visit;
 
     if (existing) {
-      // If extension reports a longer dwell time, take the max
-      // (in case both extension and web fallback report)
-      if (existing.dwell_time_ms && existing.dwell_time_ms > dwell_time_ms) {
-        updateFields.dwell_time_ms = existing.dwell_time_ms;
-      }
-
-      await supabase
-        .from("user_feedback")
-        .update(updateFields)
-        .eq("id", existing.id);
+      await supabase.from("user_feedback").update(updateFields).eq("id", existing.id);
     } else {
       await supabase.from("user_feedback").insert({
         search_result_id,

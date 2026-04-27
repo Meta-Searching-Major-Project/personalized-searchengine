@@ -6,8 +6,22 @@ import { Slider } from "@/components/ui/slider";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import AppHeader from "@/components/AppHeader";
+
+const AVAILABLE_ENGINES = [
+  { id: "google", label: "Google" },
+  { id: "bing", label: "Bing" },
+  { id: "duckduckgo", label: "DuckDuckGo" },
+  { id: "yahoo", label: "Yahoo" },
+  { id: "yandex", label: "Yandex" },
+  { id: "baidu", label: "Baidu" },
+  { id: "naver", label: "Naver" },
+  { id: "brave", label: "Brave Search" },
+  { id: "google_scholar", label: "Google Scholar" },
+  { id: "google_news", label: "Google News" },
+];
 
 const WEIGHT_LABELS = [
   { key: "weight_v", label: "Click Order (wV)", desc: "Weight for click sequence importance" },
@@ -39,6 +53,7 @@ type ProfileWeights = {
   weight_c: number;
   reading_speed: number;
   default_aggregation_method: string;
+  preferred_engines: string[] | null;
 };
 
 const SettingsPage = () => {
@@ -51,11 +66,11 @@ const SettingsPage = () => {
     if (!user) return;
     supabase
       .from("profiles")
-      .select("weight_v, weight_t, weight_p, weight_s, weight_b, weight_e, weight_c, reading_speed, default_aggregation_method")
+      .select("weight_v, weight_t, weight_p, weight_s, weight_b, weight_e, weight_c, reading_speed, default_aggregation_method, preferred_engines")
       .eq("id", user.id)
       .single()
       .then(({ data }) => {
-        if (data) setProfile(data);
+        if (data) setProfile({ ...data, preferred_engines: data.preferred_engines || [] });
       });
   }, [user]);
 
@@ -160,6 +175,37 @@ const SettingsPage = () => {
                 ))}
               </SelectContent>
             </Select>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Preferred Search Engines</CardTitle>
+            <CardDescription>
+              Select the engines you want to query. If none are selected, AMURA will dynamically route queries based on intent.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="grid grid-cols-2 gap-4">
+            {AVAILABLE_ENGINES.map((engine) => (
+              <div key={engine.id} className="flex items-center space-x-2">
+                <Checkbox
+                  id={engine.id}
+                  checked={(profile.preferred_engines || []).includes(engine.id)}
+                  onCheckedChange={(checked) => {
+                    const current = profile.preferred_engines || [];
+                    setProfile({
+                      ...profile,
+                      preferred_engines: checked
+                        ? [...current, engine.id]
+                        : current.filter((id) => id !== engine.id),
+                    });
+                  }}
+                />
+                <Label htmlFor={engine.id} className="cursor-pointer font-normal">
+                  {engine.label}
+                </Label>
+              </div>
+            ))}
           </CardContent>
         </Card>
 

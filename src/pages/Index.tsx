@@ -35,6 +35,7 @@ const Index = () => {
   const [queryTime, setQueryTime] = useState<number | undefined>();
   const [aggregationMethod, setAggregationMethod] = useState("borda");
   const [usedMethod, setUsedMethod] = useState<string | undefined>();
+  const [queryIntent, setQueryIntent] = useState<string | undefined>();
   const startTimeRef = useRef<number>(0);
   const prevHistoryIdRef = useRef<string | null>(null);
 
@@ -82,6 +83,7 @@ const Index = () => {
     setResults([]);
     setEngineSummary([]);
     setRichBlocks(undefined);
+    setQueryIntent(undefined);
     setSearchedQuery(trimmed);
     // Process previous session's feedback before starting new search (signed-in only)
     if (!isGuest && prevHistoryIdRef.current) {
@@ -106,6 +108,7 @@ const Index = () => {
       const elapsed = Date.now() - startTimeRef.current;
       setQueryTime(elapsed);
       setUsedMethod(response.aggregation_method);
+      setQueryIntent(response.query_intent);
 
       if (!response.success) {
         toast({
@@ -288,6 +291,7 @@ const Index = () => {
                 totalResults={results.length}
                 queryTime={queryTime}
                 aggregationMethod={usedMethod}
+                queryIntent={queryIntent}
               />
               <RichWidgets blocks={richBlocks} />
               {!user && (
