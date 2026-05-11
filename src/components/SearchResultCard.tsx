@@ -196,7 +196,7 @@ const SearchResultCard = ({ result, index, feedback, query = "" }: SearchResultC
           {result.snippet && (
             <p
               ref={snippetRef}
-              className="text-sm text-muted-foreground/90 line-clamp-5 leading-relaxed"
+              className="text-sm text-muted-foreground/90 line-clamp-3 leading-relaxed"
             >
               {highlightTerms(result.snippet, query)}
             </p>
