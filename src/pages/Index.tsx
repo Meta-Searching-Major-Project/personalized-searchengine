@@ -222,7 +222,7 @@ const Index = () => {
   const hasResults = results.length > 0;
 
   return (
-    <div className={`min-h-screen relative ${hasResults ? "bg-slate-50" : ""} overflow-hidden`}>
+    <div className={`min-h-screen relative overflow-hidden transition-colors duration-500`}>
       {!hasResults && <AnimatedBackground />}
       <AppHeader />
       <main
@@ -234,14 +234,14 @@ const Index = () => {
         <div className={`w-full relative ${hasResults ? "max-w-3xl" : "max-w-4xl text-center"}`}>
           <ExtensionPrompt />
 
-          <form onSubmit={handleSearch} className={!hasResults ? "mx-auto max-w-2xl bg-white/60 backdrop-blur-xl border border-white/80 shadow-[0_8px_30px_rgb(0,0,0,0.04)] rounded-full p-2 flex items-center" : "flex gap-2"}>
+          <form onSubmit={handleSearch} className={!hasResults ? "mx-auto max-w-2xl glass-panel rounded-full p-2 flex items-center transition-all duration-500" : "flex gap-2 transition-all duration-500"}>
             <div className="relative flex-1">
               <Search className={`absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 ${!hasResults ? "text-slate-400" : "text-muted-foreground"}`} />
               <Input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder={!hasResults ? "Search with aggregated, personalized results..." : "Search the web..."}
-                className={`pl-12 ${!hasResults ? "h-12 border-0 bg-transparent shadow-none text-lg focus-visible:ring-0 placeholder:text-slate-400" : ""}`}
+                className={`pl-12 ${!hasResults ? "h-12 border-0 bg-transparent shadow-none text-lg focus-visible:ring-0" : ""}`}
                 autoFocus
                 disabled={loading}
               />
@@ -250,8 +250,8 @@ const Index = () => {
               type="submit" 
               disabled={loading || !query.trim()} 
               className={!hasResults 
-                ? "h-12 px-8 rounded-full bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-700 hover:to-cyan-600 text-white font-medium shadow-md transition-all flex items-center gap-2" 
-                : "bg-slate-500 hover:bg-slate-600 text-white"}
+                ? "h-12 px-8 rounded-full bg-primary text-primary-foreground font-medium shadow-md transition-all flex items-center gap-2 hover:opacity-90" 
+                : "bg-primary text-primary-foreground hover:opacity-90"}
             >
               {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : (
                 <>
@@ -310,6 +310,7 @@ const Index = () => {
                     result={result}
                     index={i}
                     feedback={feedback}
+                    query={searchedQuery}
                   />
                 ))}
               </div>

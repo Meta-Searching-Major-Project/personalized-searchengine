@@ -47,31 +47,23 @@ export function useFeedbackTracker() {
     return session?.access_token || "";
   }, [session]);
 
-  /** Upsert a feedback row, merging new fields into existing record */
+  /**
+   * 1.5 — Single-round-trip upsert.
+   * Replaces the old SELECT → INSERT/UPDATE two-trip pattern with one call.
+   * Requires a unique constraint on (search_result_id, user_id) in user_feedback.
+   */
   const upsertFeedback = useCallback(
     async (searchResultId: string, fields: Record<string, unknown>) => {
       if (!user) return;
-
-      // Check if feedback already exists
-      const { data: existing } = await supabase
-        .from("user_feedback")
-        .select("id")
-        .eq("search_result_id", searchResultId)
-        .eq("user_id", user.id)
-        .maybeSingle();
-
-      if (existing) {
-        await supabase
-          .from("user_feedback")
-          .update({ ...fields, updated_at: new Date().toISOString() })
-          .eq("id", existing.id);
-      } else {
-        await supabase.from("user_feedback").insert({
+      await supabase.from("user_feedback").upsert(
+        {
           search_result_id: searchResultId,
           user_id: user.id,
           ...fields,
-        });
-      }
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "search_result_id,user_id" }
+      );
     },
     [user],
   );
@@ -138,16 +130,23 @@ export function useFeedbackTracker() {
     [upsertFeedback],
   );
 
-  /** C — copy-paste character count (additive) — fallback for when extension is not installed */
+  /**
+   * C — copy-paste character count (additive).
+   * Uses upsertFeedback which does a single DB round-trip.
+   * The additive merge is handled by re-reading the value only when we know
+   * the extension is not present (rare path). For the extension path this is
+   * skipped entirely since the extension reports directly to track-dwell.
+   */
   const trackCopyPaste = useCallback(
     async (searchResultId: string, charCount: number) => {
-      // Skip if extension handles this
       if (hasExtension) return;
       if (!user) return;
 
+      // Read existing chars in one shot then upsert — still 2 trips but only
+      // needed for the fallback (no-extension) path which is uncommon.
       const { data: existing } = await supabase
         .from("user_feedback")
-        .select("id, copy_paste_chars")
+        .select("copy_paste_chars")
         .eq("search_result_id", searchResultId)
         .eq("user_id", user.id)
         .maybeSingle();

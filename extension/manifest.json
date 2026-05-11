@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "PersonaSearch Tracker",
+  "name": "AMUSE Tracker",
   "version": "1.0.0",
-  "description": "Tracks dwell time and copy-paste activity for PersonaSearch personalization.",
+  "description": "Tracks dwell time and copy-paste activity for AMUSE (Aligarh Muslim University Search Engine) personalization.",
   "permissions": [
     "tabs",
     "activeTab",

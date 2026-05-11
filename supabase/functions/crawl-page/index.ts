@@ -193,12 +193,15 @@ Deno.serve(async (req) => {
     let skipped = 0;
     let failed = 0;
 
-    for (const item of queueItems) {
+    // ── 1.4: Domain-grouped parallel crawler ────────────────────────────────
+    // Group items by domain so we can crawl different sites concurrently while
+    // keeping same-domain requests sequential (politeness).
+    const crawlSingleItem = async (item: any): Promise<"crawled" | "skipped" | "failed"> => {
       try {
         const url = item.url;
         const domain = extractDomain(url);
 
-        // 2. Check if already crawled with recent content
+        // Check if already crawled with recent content
         const { data: existing } = await supabase
           .from("web_pages")
           .select("id, content_hash, last_crawled_at, crawl_count")
@@ -208,18 +211,16 @@ Deno.serve(async (req) => {
         // Skip if crawled within the last 30 days
         if (existing?.last_crawled_at) {
           const age = Date.now() - new Date(existing.last_crawled_at).getTime();
-          const thirtyDays = 30 * 24 * 60 * 60 * 1000;
-          if (age < thirtyDays) {
+          if (age < 30 * 24 * 60 * 60 * 1000) {
             await supabase
               .from("crawl_queue")
               .update({ status: "done", processed_at: new Date().toISOString() })
               .eq("id", item.id);
-            skipped++;
-            continue;
+            return "skipped";
           }
         }
 
-        // 3. Fetch the page
+        // Fetch the page
         let response: Response;
         try {
           response = await fetchWithTimeout(url, FETCH_TIMEOUT_MS);
@@ -228,144 +229,112 @@ Deno.serve(async (req) => {
           console.error(`Fetch failed for ${url}:`, msg);
           await supabase
             .from("crawl_queue")
-            .update({
-              status: "failed",
-              attempts: (item.attempts || 0) + 1,
-              processed_at: new Date().toISOString(),
-            })
+            .update({ status: "failed", attempts: (item.attempts || 0) + 1, processed_at: new Date().toISOString() })
             .eq("id", item.id);
-
-          // Still record the page with metadata from SerpApi
           if (!existing) {
             await supabase.from("web_pages").upsert(
-              {
-                url,
-                domain,
-                title: item.title || "",
-                extracted_text: item.snippet || "",
-                meta_description: item.snippet || "",
-                crawl_status: "failed",
-                error_message: msg,
-                crawl_count: 0,
-              },
+              { url, domain, title: item.title || "", extracted_text: item.snippet || "",
+                meta_description: item.snippet || "", crawl_status: "failed",
+                error_message: msg, crawl_count: 0 },
               { onConflict: "url" }
             );
           }
-          failed++;
-          continue;
+          return "failed";
         }
 
         if (!response.ok) {
           console.warn(`HTTP ${response.status} for ${url}`);
           await supabase
             .from("crawl_queue")
-            .update({
-              status: response.status === 404 ? "done" : "failed",
-              attempts: (item.attempts || 0) + 1,
-              processed_at: new Date().toISOString(),
-            })
+            .update({ status: response.status === 404 ? "done" : "failed",
+              attempts: (item.attempts || 0) + 1, processed_at: new Date().toISOString() })
             .eq("id", item.id);
-          failed++;
-          continue;
+          return "failed";
         }
 
-        // Only process HTML pages
         const contentType = response.headers.get("content-type") || "";
         if (!contentType.includes("text/html") && !contentType.includes("application/xhtml")) {
           await supabase
             .from("crawl_queue")
             .update({ status: "done", processed_at: new Date().toISOString() })
             .eq("id", item.id);
-          skipped++;
-          continue;
+          return "skipped";
         }
 
-        // 4. Extract content
         const html = await response.text();
         const title = extractTitle(html) || item.title || "";
         const metaDesc = extractMetaDescription(html) || item.snippet || "";
         let extractedText = htmlToText(html);
-
-        // Truncate to save storage
-        if (extractedText.length > MAX_TEXT_LENGTH) {
-          extractedText = extractedText.slice(0, MAX_TEXT_LENGTH);
-        }
-
+        if (extractedText.length > MAX_TEXT_LENGTH) extractedText = extractedText.slice(0, MAX_TEXT_LENGTH);
         const wordCount = extractedText.split(/\s+/).filter(Boolean).length;
-
-        // 5. Content hash for dedup
         const contentHash = await sha256(extractedText);
 
-        // Skip embedding if content hasn't changed
+        // Skip embedding if content unchanged
         if (existing?.content_hash === contentHash) {
-          await supabase
-            .from("web_pages")
-            .update({
-              last_crawled_at: new Date().toISOString(),
-              crawl_count: (existing.crawl_count || 0) + 1,
-              crawl_status: "crawled",
-            })
+          await supabase.from("web_pages")
+            .update({ last_crawled_at: new Date().toISOString(),
+              crawl_count: (existing.crawl_count || 0) + 1, crawl_status: "crawled" })
             .eq("id", existing.id);
-          await supabase
-            .from("crawl_queue")
+          await supabase.from("crawl_queue")
             .update({ status: "done", processed_at: new Date().toISOString() })
             .eq("id", item.id);
-          skipped++;
-          continue;
+          return "skipped";
         }
 
-        // 6. Generate embedding
         const embeddingText = `${title} ${metaDesc} ${extractedText.slice(0, 6000)}`;
         const embedding = await generateEmbedding(supabaseUrl, serviceKey, embeddingText);
 
-        // 7. Upsert into web_pages
         const pageData: Record<string, any> = {
-          url,
-          domain,
-          title,
-          extracted_text: extractedText,
-          meta_description: metaDesc,
-          content_hash: contentHash,
-          word_count: wordCount,
+          url, domain, title, extracted_text: extractedText, meta_description: metaDesc,
+          content_hash: contentHash, word_count: wordCount,
           last_crawled_at: new Date().toISOString(),
           crawl_count: existing ? (existing.crawl_count || 0) + 1 : 1,
-          crawl_status: "crawled",
-          error_message: null,
+          crawl_status: "crawled", error_message: null,
         };
-
-        if (embedding) {
-          pageData.embedding = `[${embedding.join(",")}]`;
-        }
+        if (embedding) pageData.embedding = `[${embedding.join(",")}]`;
 
         await supabase.from("web_pages").upsert(pageData, { onConflict: "url" });
-
-        // 8. Mark queue entry as done
-        await supabase
-          .from("crawl_queue")
+        await supabase.from("crawl_queue")
           .update({ status: "done", processed_at: new Date().toISOString() })
           .eq("id", item.id);
 
-        crawled++;
         console.log(`Crawled: ${url} (${wordCount} words)`);
-
-        // Politeness delay
-        if (queueItems.indexOf(item) < queueItems.length - 1) {
-          await new Promise((r) => setTimeout(r, CRAWL_DELAY_MS));
-        }
+        return "crawled";
       } catch (e) {
         const msg = e instanceof Error ? e.message : "Unknown error";
         console.error(`Crawl error for ${item.url}:`, msg);
-        await supabase
-          .from("crawl_queue")
-          .update({
-            status: "failed",
-            attempts: (item.attempts || 0) + 1,
-            processed_at: new Date().toISOString(),
-          })
+        await supabase.from("crawl_queue")
+          .update({ status: "failed", attempts: (item.attempts || 0) + 1,
+            processed_at: new Date().toISOString() })
           .eq("id", item.id);
-        failed++;
+        return "failed";
       }
+    };
+
+    // Process a list of same-domain items sequentially with politeness delay
+    const crawlDomainGroup = async (items: any[]): Promise<void> => {
+      for (let i = 0; i < items.length; i++) {
+        const result = await crawlSingleItem(items[i]);
+        if (result === "crawled") crawled++;
+        else if (result === "skipped") skipped++;
+        else failed++;
+        // Politeness delay between same-domain requests (not after last item)
+        if (i < items.length - 1) {
+          await new Promise((r) => setTimeout(r, CRAWL_DELAY_MS));
+        }
+      }
+    };
+
+    // Group items by domain
+    const domainGroups = new Map<string, any[]>();
+    for (const item of queueItems) {
+      const d = extractDomain(item.url);
+      if (!domainGroups.has(d)) domainGroups.set(d, []);
+      domainGroups.get(d)!.push(item);
     }
+
+    // Process all domain groups concurrently
+    await Promise.all([...domainGroups.values()].map(crawlDomainGroup));
 
     // Reset failed items with remaining attempts back to pending for retry
     await supabase

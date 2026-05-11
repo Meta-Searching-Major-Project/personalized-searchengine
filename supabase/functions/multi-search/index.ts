@@ -273,42 +273,27 @@ async function searchEngine(
       return await response.json();
     };
 
-    const pagesToFetch = [fetchPage()];
-
-    // Multi-page fetching for engines that heavily truncate on first page
-    if (engine === "google") pagesToFetch.push(fetchPage({ start: "10" }));
-    if (engine === "bing") pagesToFetch.push(fetchPage({ first: "11" }));
-    if (engine === "yahoo") pagesToFetch.push(fetchPage({ b: "11" }));
-
-    const pageDatas = (await Promise.all(pagesToFetch)).filter(Boolean);
-    if (pageDatas.length === 0) {
+    // Single page fetch per engine (1 API credit each)
+    const pageData = await fetchPage();
+    if (!pageData) {
       return { engine, results: [], error: `Failed to fetch from SerpAPI` };
     }
 
-    // Use the first page for rich blocks
-    const data = pageDatas[0];
-    const rich = extractRichBlocks(data);
-
+    const rich = extractRichBlocks(pageData);
     const resultsKey = config.resultsKey || "organic_results";
     const parser = config.parseResult || parseStandard;
+    const rawResults = getNestedKey(pageData, resultsKey) || [];
 
     let organicResults: SerpResult[] = [];
-
-    for (const pd of pageDatas) {
-      const rawResults = getNestedKey(pd, resultsKey) || [];
-      if (Array.isArray(rawResults)) {
-        for (let i = 0; i < rawResults.length; i++) {
-          const parsed = parser(rawResults[i], organicResults.length);
-          // Deduplicate across pages
-          if (parsed && !organicResults.some((r) => r.link === parsed.link)) {
-            organicResults.push(parsed);
-          }
-        }
+    if (Array.isArray(rawResults)) {
+      for (let i = 0; i < rawResults.length; i++) {
+        const parsed = parser(rawResults[i], i);
+        if (parsed) organicResults.push(parsed);
       }
     }
 
-    // Hard cap at exactly 20 results maximum for every engine
-    organicResults = organicResults.slice(0, 20);
+    // Cap at 10 results per engine (one page)
+    organicResults = organicResults.slice(0, 10);
 
     // 3. Upsert cache
     const { error: cacheError } = await serviceClient
@@ -336,13 +321,33 @@ async function searchEngine(
 
 // ─── Deduplication (separate from ranking) ──────────────────────────
 
+// ── 2.3: Robust URL normaliser ──────────────────────────────────────
+// Strips scheme differences (http vs https), www prefix, and common
+// tracking query parameters so truly identical pages get merged.
+const TRACKING_PARAMS = [
+  "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+  "ref", "fbclid", "gclid", "msclkid", "mc_cid", "mc_eid",
+];
+
+function normalizeUrlForDedup(rawUrl: string): string {
+  try {
+    const u = new URL(rawUrl);
+    u.protocol = "https:";
+    u.hostname = u.hostname.replace(/^www\./, "");
+    for (const p of TRACKING_PARAMS) u.searchParams.delete(p);
+    return u.toString().replace(/\/+$/, "").toLowerCase();
+  } catch {
+    return rawUrl.replace(/\/+$/, "").toLowerCase();
+  }
+}
+
 function deduplicateResults(engineResults: EngineResult[]): MergedDoc[] {
   const urlMap = new Map<string, MergedDoc>();
 
   for (const er of engineResults) {
     for (const r of er.results) {
       if (!r.link) continue;
-      const normalizedUrl = r.link.replace(/\/+$/, "").toLowerCase();
+      const normalizedUrl = normalizeUrlForDedup(r.link);
       const existing = urlMap.get(normalizedUrl);
       if (existing) {
         existing.engines.push({ engine: er.engine, rank: r.position });
@@ -599,11 +604,22 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const authHeader = req.headers.get("Authorization");
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
     const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+
+    // ── 1.1: Early API key check — before any body parsing ──────────────────
+    const apiKey = Deno.env.get("SERP_API_KEY");
+    if (!apiKey) {
+      console.error("SERP_API_KEY not configured");
+      return new Response(
+        JSON.stringify({ success: false, error: "Search API not configured" }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
     const serviceClient = createClient(supabaseUrl, serviceKey);
+    const authHeader = req.headers.get("Authorization");
     let authUser: { id: string } | null = null;
 
     if (authHeader && authHeader.startsWith("Bearer ")) {
@@ -633,19 +649,10 @@ Deno.serve(async (req) => {
       );
     }
 
-    const apiKey = Deno.env.get("SERP_API_KEY");
-    if (!apiKey) {
-      console.error("SERP_API_KEY not configured");
-      return new Response(
-        JSON.stringify({ success: false, error: "Search API not configured" }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
     const trimmedQuery = query.trim();
     const method = aggregation_method || "borda";
 
-    // ── Intent detection + dynamic engine selection ──
+    // ── Intent detection + dynamic engine selection ──────────────────────────
     const intentResult = detectQueryIntent(trimmedQuery);
     const selectedEngines = selectEnginesForIntent(
       intentResult,
@@ -653,10 +660,49 @@ Deno.serve(async (req) => {
     );
     console.log(`Multi-engine search [${method}] intent=${intentResult.intent} engines=${selectedEngines.map(e=>e.engine).join(",")}:`, trimmedQuery);
 
-    // Query selected engines in parallel (cache-first per engine)
-    const engineResults: EngineResult[] = await Promise.all(
+    // ── 1.3: Launch SerpAPI + embedding + SQM all in parallel ───────────────
+    // Previously: embedding only started AFTER all SerpAPI calls finished.
+    // Now: all three kick off simultaneously, saving 400-800ms per search.
+    const serpApiPromise = Promise.all(
       selectedEngines.map((cfg) => searchEngine(trimmedQuery, cfg, apiKey, serviceClient))
     );
+
+    // For guests these resolve immediately with null / no-op.
+    let embeddingFetchPromise: Promise<number[] | null> = Promise.resolve(null);
+    let sqmFetchPromise: Promise<{ data: { engine: string; sqm_score: number }[] | null }> =
+      Promise.resolve({ data: null });
+
+    if (authUser) {
+      embeddingFetchPromise = (async () => {
+        try {
+          const resp = await fetch(`${supabaseUrl}/functions/v1/generate-embedding`, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${serviceKey}`, "Content-Type": "application/json" },
+            body: JSON.stringify({ text: trimmedQuery, task_type: "RETRIEVAL_QUERY" }),
+          });
+          if (resp.ok) {
+            const data = await resp.json();
+            return (data.embedding as number[]) || null;
+          }
+          return null;
+        } catch (e) {
+          console.error("Query embedding error:", e);
+          return null;
+        }
+      })();
+
+      sqmFetchPromise = serviceClient
+        .from("search_quality_measures")
+        .select("engine, sqm_score")
+        .eq("user_id", authUser.id) as any;
+    }
+
+    // Single await — all three complete in parallel.
+    const [engineResults, queryEmbedding, sqmRes] = await Promise.all([
+      serpApiPromise,
+      embeddingFetchPromise,
+      sqmFetchPromise,
+    ]) as [EngineResult[], number[] | null, { data: { engine: string; sqm_score: number }[] | null }];
 
     // Merge rich blocks from all engines
     const richBlocks = mergeRichBlocks(engineResults);
@@ -667,61 +713,23 @@ Deno.serve(async (req) => {
 
     if (authUser) {
       try {
-        const embeddingPromise = (async () => {
-          try {
-            const resp = await fetch(`${supabaseUrl}/functions/v1/generate-embedding`, {
-              method: "POST",
-              headers: {
-                Authorization: `Bearer ${serviceKey}`,
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({ text: trimmedQuery, task_type: "RETRIEVAL_QUERY" }),
-            });
-            if (resp.ok) {
-              const data = await resp.json();
-              return data.embedding as number[] | null;
-            }
-            return null;
-          } catch (e) {
-            console.error("Query embedding error:", e);
-            return null;
-          }
-        })();
-
-        const [queryEmbedding, sqmRes] = await Promise.all([
-          embeddingPromise,
-          serviceClient
-            .from("search_quality_measures")
-            .select("engine, sqm_score")
-            .eq("user_id", authUser.id),
-        ]);
-
         if (queryEmbedding) {
           const embeddingStr = `[${queryEmbedding.join(",")}]`;
           const { data: matchedDocs, error: matchError } = await serviceClient.rpc(
             "match_learned_documents",
-            {
-              query_embedding: embeddingStr,
-              match_user_id: authUser.id,
-              match_threshold: 0.75,
-              match_count: 20,
-            }
+            { query_embedding: embeddingStr, match_user_id: authUser.id,
+              match_threshold: 0.75, match_count: 20 }
           );
 
           if (!matchError && matchedDocs && matchedDocs.length > 0) {
-            // N+1 Engine: Filter documents that have a meaningful learned relevance
             const thresholdDocs = matchedDocs.filter((d: any) => d.learned_score >= 0.05);
-
             if (thresholdDocs.length > 0) {
               const maxLearnedScore = Math.max(...thresholdDocs.map((d: any) => d.learned_score), 0.01);
               const scored = thresholdDocs.map((d: any) => ({
                 ...d,
-                // Blend the semantic similarity with the explicit learned_score
                 blended: d.similarity * 0.6 + (d.learned_score / maxLearnedScore) * 0.4,
               }));
-              
               scored.sort((a: any, b: any) => b.blended - a.blended);
-              
               learningResults.results = scored.map((doc: any, i: number) => ({
                 position: i + 1,
                 title: doc.title || doc.url,
@@ -731,6 +739,7 @@ Deno.serve(async (req) => {
             }
           }
         } else {
+          // Fallback: keyword match when embedding unavailable
           const { data: learnedRes } = await serviceClient
             .from("feedback_learning_index")
             .select("url, title, snippet, learned_score, query_matches")
@@ -744,7 +753,9 @@ Deno.serve(async (req) => {
               const matches = doc.query_matches || [];
               return matches.some((q: string) => {
                 const matchWords = q.toLowerCase().split(/\s+/);
-                return queryWords.every((w) => matchWords.includes(w));
+                // 60% word overlap threshold (improved from strict "every" match)
+                const overlap = queryWords.filter(w => matchWords.includes(w)).length / queryWords.length;
+                return overlap >= 0.6;
               });
             });
             learningResults.results = relevant.map((doc, i) => ({

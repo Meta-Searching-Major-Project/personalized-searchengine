@@ -10,6 +10,25 @@ interface SearchResultCardProps {
   result: ResultWithId;
   index: number;
   feedback: ReturnType<typeof useFeedbackTracker>;
+  query?: string;
+}
+
+// ── 2.1: Query term highlighter (safe — no dangerouslySetInnerHTML) ──────────
+// Splits the snippet on matching words and wraps them in <mark> elements.
+// The capturing-group split trick means odd-indexed parts are the matches.
+function highlightTerms(text: string, query: string): React.ReactNode[] {
+  if (!query || !text) return [text];
+  const words = query.trim().split(/\s+/).filter((w) => w.length > 2);
+  if (words.length === 0) return [text];
+  const escaped = words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const pattern = new RegExp(`(${escaped.join("|")})`, "gi");
+  return text.split(pattern).map((part, i) =>
+    i % 2 === 1 ? (
+      <mark key={i} className="bg-amber-100 text-amber-900 rounded-sm px-0.5 font-medium">
+        {part}
+      </mark>
+    ) : part
+  );
 }
 
 const engineColors: Record<string, string> = {
@@ -20,7 +39,7 @@ const engineColors: Record<string, string> = {
   local_index: "bg-cyan-100 text-cyan-800 dark:bg-cyan-900 dark:text-cyan-200",
 };
 
-const SearchResultCard = ({ result, index, feedback }: SearchResultCardProps) => {
+const SearchResultCard = ({ result, index, feedback, query = "" }: SearchResultCardProps) => {
   const snippetRef = useRef<HTMLParagraphElement>(null);
   const { toast } = useToast();
 
@@ -155,20 +174,20 @@ const SearchResultCard = ({ result, index, feedback }: SearchResultCardProps) =>
   );
 
   return (
-    <div className="group rounded-lg border bg-card p-4 transition-colors hover:bg-accent/50">
+    <div className="group rounded-xl border border-transparent bg-card p-5 shadow-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-md hover:bg-accent/50">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <div className="mb-1 flex items-center gap-2">
-            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium text-muted-foreground">
+          <div className="mb-1.5 flex items-center gap-2">
+            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-bold text-muted-foreground">
               {index + 1}
             </span>
-            <p className="truncate text-xs text-muted-foreground">{displayUrl}</p>
+            <p className="truncate text-xs font-medium text-muted-foreground/80">{displayUrl}</p>
           </div>
           <a
             href={result.url}
             target="_blank"
             rel="noopener noreferrer"
-            className="mb-1 inline-flex items-center gap-1 text-base font-medium text-primary hover:underline"
+            className="mb-1.5 inline-flex items-center gap-1 text-lg font-semibold text-primary hover:underline"
             onClick={handleLinkClick}
           >
             {result.title}
@@ -177,12 +196,17 @@ const SearchResultCard = ({ result, index, feedback }: SearchResultCardProps) =>
           {result.snippet && (
             <p
               ref={snippetRef}
-              className="text-sm text-muted-foreground line-clamp-2"
+              className="text-sm text-muted-foreground/90 line-clamp-5 leading-relaxed"
             >
-              {result.snippet}
+              {highlightTerms(result.snippet, query)}
             </p>
           )}
-          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          <div className="mt-3 flex flex-wrap items-center gap-1.5">
+            {result.engines.some(e => e.engine === 'learned') && (
+              <Badge variant="outline" className="border-purple-200 bg-purple-50 text-purple-700 dark:border-purple-800 dark:bg-purple-900/30 dark:text-purple-300 font-semibold gap-1 mr-1 shadow-sm">
+                ✨ Personalized
+              </Badge>
+            )}
             {result.engines.map((e) => (
               <Badge
                 key={e.engine}

@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import AppHeader from "@/components/AppHeader";
+import { useTheme } from "@/components/theme-provider";
 
 const AVAILABLE_ENGINES = [
   { id: "google", label: "Google" },
@@ -59,6 +60,7 @@ type ProfileWeights = {
 const SettingsPage = () => {
   const { user } = useAuth();
   const { toast } = useToast();
+  const { theme, setTheme } = useTheme();
   const [profile, setProfile] = useState<ProfileWeights | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -100,6 +102,25 @@ const SettingsPage = () => {
       <AppHeader />
       <main className="mx-auto max-w-2xl p-4 space-y-6">
         <h1 className="text-2xl font-bold text-foreground">Settings</h1>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Appearance</CardTitle>
+            <CardDescription>Choose between Light and Dark mode.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Select value={theme} onValueChange={(v) => setTheme(v as any)}>
+              <SelectTrigger>
+                <SelectValue placeholder="Select theme" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="light">Light</SelectItem>
+                <SelectItem value="dark">Dark</SelectItem>
+                <SelectItem value="system">System</SelectItem>
+              </SelectContent>
+            </Select>
+          </CardContent>
+        </Card>
 
         <Card>
           <CardHeader>
