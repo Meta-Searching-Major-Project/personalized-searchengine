@@ -26,7 +26,7 @@ const AppHeader = () => {
         
         {/* Logo */}
         <div className="flex items-center cursor-pointer" onClick={() => navigate("/")}>
-          <img src="/logo-full.png" alt="AMUSE Logo" className="h-10 object-contain" />
+          <img src="/logo-full.svg" alt="AMUSE Logo" className="h-10 object-contain" />
         </div>
 
         {/* Center Nav */}
