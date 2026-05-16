@@ -1,6 +1,6 @@
-# AMURA (PersonaSearch): Strict Codebase Report - Part 3: Telemetry Extension & Database
+﻿# AMUSE (PersonaSearch): Strict Codebase Report - Part 3: Telemetry Extension & Database
 
-*This is Part 3 of an exhaustive, file-by-file technical breakdown of the AMURA Meta-Search engine. This section focuses strictly on the Manifest V3 Chrome Extension and the PostgreSQL Schema.*
+*This is Part 3 of an exhaustive, file-by-file technical breakdown of the AMUSE Meta-Search engine. This section focuses strictly on the Manifest V3 Chrome Extension and the PostgreSQL Schema.*
 
 ---
 
@@ -9,7 +9,7 @@
 The extension tracks precise user behavior without relying on explicit input, forming the foundation of the implicit feedback loop.
 
 ### 1.1 `extension/content.js` (DOM Interaction Script)
-This file is injected into the DOM of every website a user visits after clicking a link in the AMURA web interface.
+This file is injected into the DOM of every website a user visits after clicking a link in the AMUSE web interface.
 *   **Initialization**: Listens to the global `window` object for a `message` event containing `type: "PERSONASEARCH_TRACK_START"`. It extracts the `searchResultId`, target URL, and Auth Token, forwarding them via `chrome.runtime.sendMessage` to the isolated Background worker.
 *   **Scroll Depth Logic (`scroll` listener)**: 
     *   Calculates `Math.max(document.body.scrollHeight, document.documentElement.scrollHeight, document.body.offsetHeight)`.
@@ -29,7 +29,7 @@ The Background script maintains the centralized state of all tracked tabs, solvi
     *   Constructs a native `URL` object.
     *   Iterates through the `search` params using `URLSearchParams`.
     *   Aggressively `delete()`s known analytics tags: `utm_source`, `utm_medium`, `utm_campaign`, `utm_term`, `utm_content`, `fbclid`, and `gclid`.
-    *   It reconstructs the URL without trailing slashes. This ensures that even if a website appends a tracking token upon click, the Extension can still match the URL against the clean version stored in the AMURA database.
+    *   It reconstructs the URL without trailing slashes. This ensures that even if a website appends a tracking token upon click, the Extension can still match the URL against the clean version stored in the AMUSE database.
 *   **Active Tab Enforcement**:
     *   `chrome.windows.onFocusChanged`: If a user minimizes the browser or clicks into another application, `windowId` becomes `WINDOW_ID_NONE`. The script iterates through the `trackedTabs` Map and executes `pauseTimer(id)` on every single tab, stopping all dwell incrementation.
     *   `chrome.tabs.onActivated`: When a user switches tabs within the browser, the script calls `pauseTimer()` on the previously active tab, and initializes `activeStart = Date.now()` on the newly focused tab.

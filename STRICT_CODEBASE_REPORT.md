@@ -1,6 +1,6 @@
-# AMURA (PersonaSearch): Strict Codebase Architecture & Implementation Report
+﻿# AMUSE (PersonaSearch): Strict Codebase Architecture & Implementation Report
 
-*This document provides an exhaustive, granular, file-by-file technical breakdown of the AMURA Meta-Search engine. It is strictly grounded in the exact source code implemented in the repository, documenting the precise functions, mathematical formulas, hooks, and SQL triggers currently in production.*
+*This document provides an exhaustive, granular, file-by-file technical breakdown of the AMUSE Meta-Search engine. It is strictly grounded in the exact source code implemented in the repository, documenting the precise functions, mathematical formulas, hooks, and SQL triggers currently in production.*
 
 ---
 
@@ -125,7 +125,7 @@ Responsible for maintaining the N+1 learned database.
 *   **Importance Threshold**: It calculates the Importance Score $I(d)$ identical to `compute-sqm`. If $I(d) > 0$, the document qualifies for the learning index.
 *   **Chunking Strategy**: To avoid context limits, `chunkText()` splits texts longer than 2000 characters into 1500-character segments with 200-character overlaps.
 *   **Vectorization**: It POSTs the text to `/functions/v1/generate-embedding`. If chunked, it averages the resulting vectors and normalizes them via L2 Normalization (`norm = Math.sqrt(avg.reduce((s, v) => s + v * v, 0))`).
-*   **Score Decay & Update**: It queries `feedback_learning_index`. If the document exists, the new `learned_score` is updated using the mathematical formula: `New = (Old + (µ * I(d))) / (1 + (µ * I(d)))` where $\mu = 0.1$.
+*   **Score Decay & Update**: It queries `feedback_learning_index`. If the document exists, the new `learned_score` is updated using the mathematical formula: `New = (Old + (Âµ * I(d))) / (1 + (Âµ * I(d)))` where $\mu = 0.1$.
 *   **Ignored Document Penalty**: For documents returned in the SERP but *not* clicked, it applies an exponential decay penalty: `learned_score = learned_score * Math.pow(0.9, ignored_count)`.
 
 ---

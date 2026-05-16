@@ -1,6 +1,6 @@
-# AMURA (PersonaSearch): Strict Codebase Report - Part 1: Frontend & UI
+﻿# AMUSE (PersonaSearch): Strict Codebase Report - Part 1: Frontend & UI
 
-*This is Part 1 of an exhaustive, file-by-file technical breakdown of the AMURA Meta-Search engine. This section focuses strictly on the React/Vite implementation.*
+*This is Part 1 of an exhaustive, file-by-file technical breakdown of the AMUSE Meta-Search engine. This section focuses strictly on the React/Vite implementation.*
 
 ---
 
@@ -70,5 +70,5 @@ Renders an individual search result row and acts as the crucial bridge to the te
 ### 3.3 `src/components/EngineStatusBar.tsx`
 A purely presentational component that maps over the `EngineSummary` array returned by the Edge Function.
 *   Displays the total result count and the backend query resolution time in seconds (`(queryTime / 1000).toFixed(1)s`).
-*   Renders a `<Badge>` for the `queryIntent` (e.g., changing text to "💻 Coding" if `queryIntent === 'coding'`).
-*   Maps through each upstream engine. If `e.error` exists, it renders a red `<AlertCircle>`. If `e.cached` is true, it renders a "⚡" icon indicating the result bypassed SerpAPI and was served from the Supabase edge cache.
+*   Renders a `<Badge>` for the `queryIntent` (e.g., changing text to "ðŸ’» Coding" if `queryIntent === 'coding'`).
+*   Maps through each upstream engine. If `e.error` exists, it renders a red `<AlertCircle>`. If `e.cached` is true, it renders a "âš¡" icon indicating the result bypassed SerpAPI and was served from the Supabase edge cache.

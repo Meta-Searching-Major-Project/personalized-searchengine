@@ -1,6 +1,6 @@
-# AMURA (PersonaSearch): Strict Codebase Report - Part 2: Backend Edge Functions
+﻿# AMUSE (PersonaSearch): Strict Codebase Report - Part 2: Backend Edge Functions
 
-*This is Part 2 of an exhaustive, file-by-file technical breakdown of the AMURA Meta-Search engine. This section focuses strictly on the Deno V8 Edge Functions hosted on Supabase.*
+*This is Part 2 of an exhaustive, file-by-file technical breakdown of the AMUSE Meta-Search engine. This section focuses strictly on the Deno V8 Edge Functions hosted on Supabase.*
 
 ---
 
@@ -75,5 +75,5 @@ Long web pages exceed the input limits of standard LLM embedding models.
 
 ### 3.3 Score Decay & SQL Upsert
 *   Calculates $I(d)$ identically to the SQM function.
-*   Queries `feedback_learning_index`. If the URL is already learned, it updates the score using a dynamic learning rate ($\mu = 0.1$): `New = (Old + (µ * I(d))) / (1 + (µ * I(d)))`.
+*   Queries `feedback_learning_index`. If the URL is already learned, it updates the score using a dynamic learning rate ($\mu = 0.1$): `New = (Old + (Âµ * I(d))) / (1 + (Âµ * I(d)))`.
 *   **Ignored Document Penalty**: Iterates over all URLs returned in the search session. If a URL was *not* interacted with, it increments the `ignored_count` and applies exponential decay: `newScore = existing.learned_score * Math.pow(0.9, newIgnoredCount)`.

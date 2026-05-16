@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+﻿import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -126,7 +126,7 @@ const SettingsPage = () => {
           <CardHeader>
             <CardTitle>Feedback Weights</CardTitle>
             <CardDescription>
-              Adjust the importance of each implicit feedback signal (0–2). These weights determine how your preference ranking R is computed per the paper's formula.
+              Adjust the importance of each implicit feedback signal (0â€“2). These weights determine how your preference ranking R is computed per the paper's formula.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
@@ -203,7 +203,7 @@ const SettingsPage = () => {
           <CardHeader>
             <CardTitle>Preferred Search Engines</CardTitle>
             <CardDescription>
-              Select the engines you want to query. If none are selected, AMURA will dynamically route queries based on intent.
+              Select the engines you want to query. If none are selected, AMUSE will dynamically route queries based on intent.
             </CardDescription>
           </CardHeader>
           <CardContent className="grid grid-cols-2 gap-4">
