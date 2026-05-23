@@ -1,98 +1,52 @@
-# Welcome to your Lovable project
+# AMUSE 🇮🇳 
+**India's First Personalized Search Engine**
 
-## Project info
+[![Website Status](https://img.shields.io/website?url=https%3A%2F%2Famuse.amu.ac.in&label=amuse.amu.ac.in)](https://amuse.amu.ac.in)
+[![Deployment](https://img.shields.io/badge/Deployed_on-Docker_%7C_Nginx-blue?logo=docker)](#)
+[![Tech Stack](https://img.shields.io/badge/Frontend-React_%7C_Vite_%7C_Tailwind-38B2AC?logo=react)](#)
 
-**URL**: https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID
+**AMUSE** is a next-generation, indigenous meta-search engine built to deliver a highly personalized internet discovery experience. Designed from the ground up to reduce reliance on foreign technology monopolies, AMUSE leverages custom rank aggregation and vector indexing to structurally personalize search algorithms without compromising user privacy.
 
-## How can I edit this code?
+This project was developed as a final year B.Tech Computer Engineering thesis at **Zakir Husain College of Engineering and Technology, Aligarh Muslim University**.
 
-There are several ways of editing your application.
+---
 
-**Use Lovable**
+## 🚀 Core Capabilities
 
-Simply visit the [Lovable Project](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and start prompting.
+* **Personalized Rank Aggregation:** Dynamically reorders search results based on contextual relevance and user preference patterns.
+* **Vector-Indexed Semantic Search:** Utilizes advanced machine learning models via Hugging Face APIs to understand the true semantic intent behind queries, rather than relying solely on keyword matching.
+* **Indigenous Infrastructure:** Fully self-hosted on enterprise-grade university servers, establishing a sovereign search gateway independent of global search monopolies.
+* **Frictionless Browser Integration:** Includes a custom browser extension to bridge the user's daily web navigation directly to the AMUSE engine.
+* **Secure Enterprise Architecture:** Deployed via Docker with an Nginx reverse proxy, Supabase identity management, and secured by an official GlobalSign wildcard SSL certificate (`*.amu.ac.in`).
 
-Changes made via Lovable will be committed automatically to this repo.
+---
 
-**Use your preferred IDE**
+## 🛠️ Technology Stack
 
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
+**Frontend Architecture:**
+* React.js (Vite)
+* Tailwind CSS
+* React Router (Configured for Nginx SPA routing)
 
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
+**Backend & AI Pipelines:**
+* Node.js / Express API Gateway
+* Python (Data processing and Vectorization)
+* Hugging Face APIs (Embedding and NLP models)
+* Supabase (PostgreSQL Database & GoTrue Authentication)
 
-Follow these steps:
+**Infrastructure & DevOps:**
+* Docker & Docker Compose
+* Nginx Web Server
+* OpenSSL (Cryptography)
+* UFW (Ubuntu Firewall configuration)
 
-```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
+---
 
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
+## ⚙️ Local Development Setup
 
-# Step 3: Install the necessary dependencies.
-npm i
+To run the AMUSE web interface and API gateways locally for development:
 
-# Step 4: Start the development server with auto-reloading and an instant preview.
-npm run dev
-
-# Step 5: Build the project for production.
-npm run build
-```
-
-## 🧩 Chrome Extension (PersonaSearch Tracker)
-
-To accurately track "Dwell Time" (T) and "Copy-Paste" (C) metrics for the 7-tuple feedback system, you must install the local Chrome Extension.
-
-### How to Install the Extension:
-
-1. Open Google Chrome (or any Chromium-based browser like Brave or Edge).
-2. Navigate to `chrome://extensions/` in your address bar.
-3. In the top right corner, toggle **Developer mode** to ON.
-4. Click the **Load unpacked** button in the top left.
-5. Select the `extension` folder located inside this project directory:
-   `<path-to-project>\extension`
-6. The extension will appear in your list. You can click the puzzle piece icon next to your URL bar and "pin" the PersonaSearch Tracker so its icon is visible.
-
-### How to Use:
-
-1. Start your local server (`npm run dev`) and go to `http://localhost:8080`.
-2. Make sure you are **signed in**.
-3. Click the extension icon in your browser toolbar. It should say **"Connected to PersonaSearch"** with a green dot.
-4. Perform a search and click any result.
-5. The extension will now silently and accurately track your active time on that page and automatically report it back to the database!
-
-**Edit a file directly in GitHub**
-
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
-
-**Use GitHub Codespaces**
-
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
-
-## What technologies are used for this project?
-
-This project is built with:
-
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
-
-## How can I deploy this project?
-
-Simply open [Lovable](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and click on Share -> Publish.
-
-## Can I connect a custom domain to my Lovable project?
-
-Yes, you can!
-
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
-
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+1. **Clone the repository:**
+   ```bash
+   git clone [https://github.com/yourusername/amuse-search.git](https://github.com/yourusername/amuse-search.git)
+   cd amuse-search
